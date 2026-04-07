@@ -17,34 +17,39 @@ func TestParseBeadID(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "single line",
+			name:   "bd prefix",
+			stdout: "✓ Created issue: bd-abc123 — Some Title\n",
+			want:   "bd-abc123",
+		},
+		{
+			name:   "custom prefix vw",
+			stdout: "✓ Created issue: vw-nlw — 1-4-mobile-navigation-menu: Mobile Navigation Menu\n",
+			want:   "vw-nlw",
+		},
+		{
+			name:   "custom prefix bb",
+			stdout: "✓ Created issue: bb-bhg — 1-1: Frontend Scaffold\n",
+			want:   "bb-bhg",
+		},
+		{
+			name:   "leading blank lines",
+			stdout: "\n\n✓ Created issue: bd-xyz789 — Title\n",
+			want:   "bd-xyz789",
+		},
+		{
+			name:   "warning before created line",
+			stdout: "warning: beads.role not configured.\n✓ Created issue: vw-abc — Title\n  Priority: P2\n",
+			want:   "vw-abc",
+		},
+		{
+			name:   "fallback single line bead id",
 			stdout: "bd-abc123\n",
 			want:   "bd-abc123",
 		},
 		{
-			name:   "leading blank lines",
-			stdout: "\n\nbd-xyz789\n",
-			want:   "bd-xyz789",
-		},
-		{
-			name:   "trailing whitespace",
-			stdout: "  bd-trimmed  \n",
-			want:   "bd-trimmed",
-		},
-		{
-			name:   "multiple lines takes first matching bead id",
-			stdout: "INFO creating bead\nbd-first\nsome other output\n",
-			want:   "bd-first",
-		},
-		{
-			name:   "extracts bead id embedded in line",
+			name:   "fallback embedded in line",
 			stdout: "Created bead: bd-abc123 successfully\n",
 			want:   "bd-abc123",
-		},
-		{
-			name:   "ignores non-matching first line",
-			stdout: "created successfully\nid: bd-real-1\n",
-			want:   "bd-real-1",
 		},
 		{
 			name:   "empty stdout",
@@ -105,20 +110,20 @@ func TestAppendTrackingComment(t *testing.T) {
 func TestMockExecutor_RecordsCalls(t *testing.T) {
 	mock := &MockExecutor{BeadID: "bd-test-123"}
 
-	id, err := mock.Create(context.Background(), "1-2-schema", "Database Schema", "ACs here", nil)
+	id, err := mock.Create(context.Background(), "1-2-schema", "Database Schema", "/path/to/story.md", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "bd-test-123", id)
 
 	require.Len(t, mock.Calls, 1)
 	assert.Equal(t, "1-2-schema", mock.Calls[0].Key)
 	assert.Equal(t, "Database Schema", mock.Calls[0].Title)
-	assert.Equal(t, "ACs here", mock.Calls[0].ACs)
+	assert.Equal(t, "/path/to/story.md", mock.Calls[0].StoryPath)
 }
 
 func TestMockExecutor_ReturnsError(t *testing.T) {
 	mock := &MockExecutor{Err: assert.AnError}
 
-	id, err := mock.Create(context.Background(), "key", "title", "acs", nil)
+	id, err := mock.Create(context.Background(), "key", "title", "/path/to/story.md", nil)
 	require.Error(t, err)
 	assert.Empty(t, id)
 	require.Len(t, mock.Calls, 1)

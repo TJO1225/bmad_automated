@@ -137,9 +137,10 @@ func NewExecutor(config ExecutorConfig) *DefaultExecutor {
 // to check whether Claude completed successfully.
 func (e *DefaultExecutor) Execute(ctx context.Context, prompt string) (<-chan Event, error) {
 	cmd := exec.CommandContext(ctx, e.config.BinaryPath,
-		"--enable-auto-mode",
 		"-p", prompt,
 		"--output-format", e.config.OutputFormat,
+		"--verbose",
+		"--dangerously-skip-permissions",
 	)
 	e.applyCommandConfig(cmd)
 
@@ -186,9 +187,10 @@ func (e *DefaultExecutor) Execute(ctx context.Context, prompt string) (<-chan Ev
 // this method returns.
 func (e *DefaultExecutor) ExecuteWithResult(ctx context.Context, prompt string, handler EventHandler) (int, error) {
 	cmd := exec.CommandContext(ctx, e.config.BinaryPath,
-		"--enable-auto-mode",
 		"-p", prompt,
 		"--output-format", e.config.OutputFormat,
+		"--verbose",
+		"--dangerously-skip-permissions",
 	)
 	e.applyCommandConfig(cmd)
 

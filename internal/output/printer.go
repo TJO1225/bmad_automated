@@ -325,16 +325,23 @@ func (p *DefaultPrinter) BatchSummary(results []StoryResult, counts BatchCounts,
 
 		created := 0
 		failed := 0
+		skipped := 0
 		for _, r := range g.stories {
 			sb.WriteString(formatStoryRow(r) + "\n")
-			if r.Success {
+			if r.Skipped {
+				skipped++
+			} else if r.Success {
 				created++
-			} else if !r.Skipped {
+			} else {
 				failed++
 			}
 		}
 
-		sb.WriteString(mutedStyle.Render(fmt.Sprintf("  Epic %d: %d created, %d failed", g.num, created, failed)) + "\n")
+		subtotal := fmt.Sprintf("  Epic %d: %d created, %d failed", g.num, created, failed)
+		if skipped > 0 {
+			subtotal += fmt.Sprintf(", %d skipped", skipped)
+		}
+		sb.WriteString(mutedStyle.Render(subtotal) + "\n")
 	}
 
 	sb.WriteString("\n" + strings.Repeat("─", 50) + "\n")
@@ -364,13 +371,11 @@ func formatTotals(c BatchCounts) string {
 }
 
 // epicNumFromKey extracts the epic number from a story key (e.g., "3-1-slug" → 3).
+// Returns 0 if the key prefix is not a valid integer.
 func epicNumFromKey(key string) int {
 	parts := strings.SplitN(key, "-", 3)
-	if len(parts) >= 1 {
-		n, _ := strconv.Atoi(parts[0])
-		return n
-	}
-	return 0
+	n, _ := strconv.Atoi(parts[0])
+	return n
 }
 
 // CommandHeader prints the header before running a command.

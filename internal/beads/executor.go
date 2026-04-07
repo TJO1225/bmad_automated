@@ -14,18 +14,22 @@ import (
 
 // Executor runs the bd CLI to create beads.
 type Executor interface {
-	// Create invokes `bd create` with the story key, title, and acceptance criteria.
+	// Create invokes `bd create` with the story key, title, and the full story
+	// file as the bead description (via --body-file).
 	// Returns the bead ID on success. Uses context for timeout/cancellation.
 	//
 	// If bdOut is non-nil, a copy of bd's stdout and stderr is written to bdOut as
 	// the subprocess runs (for verbose CLI output).
-	Create(ctx context.Context, key, title, acs string, bdOut io.Writer) (beadID string, err error)
+	Create(ctx context.Context, key, title, storyPath string, bdOut io.Writer) (beadID string, err error)
 }
 
 // DefaultExecutor implements [Executor] by shelling out to the bd CLI.
 type DefaultExecutor struct {
 	// BinaryPath is the path to the bd binary. Defaults to "bd" if empty.
 	BinaryPath string
+	// WorkingDir is the directory in which bd runs. This determines which
+	// .beads/ database bd discovers. If empty, the process CWD is used.
+	WorkingDir string
 }
 
 // NewExecutor creates a new [DefaultExecutor] with the bd binary on PATH.
@@ -33,10 +37,10 @@ func NewExecutor() *DefaultExecutor {
 	return &DefaultExecutor{BinaryPath: "bd"}
 }
 
-// Create invokes `bd create "<key>: <title>" --notes "<acs>"` and parses the
-// bead ID from stdout. A 30-second timeout is applied if the context has no
-// deadline set.
-func (e *DefaultExecutor) Create(ctx context.Context, key, title, acs string, bdOut io.Writer) (string, error) {
+// Create invokes `bd create "<key>: <title>" --body-file "<storyPath>"` and
+// parses the bead ID from stdout. A 30-second timeout is applied if the
+// context has no deadline set.
+func (e *DefaultExecutor) Create(ctx context.Context, key, title, storyPath string, bdOut io.Writer) (string, error) {
 	binary := e.BinaryPath
 	if binary == "" {
 		binary = "bd"
@@ -50,7 +54,10 @@ func (e *DefaultExecutor) Create(ctx context.Context, key, title, acs string, bd
 	}
 
 	label := fmt.Sprintf("%s: %s", key, title)
-	cmd := exec.CommandContext(ctx, binary, "create", label, "--notes", acs)
+	cmd := exec.CommandContext(ctx, binary, "create", label, "--body-file", storyPath)
+	if e.WorkingDir != "" {
+		cmd.Dir = e.WorkingDir
+	}
 
 	var stdout, stderr bytes.Buffer
 	if bdOut != nil {
@@ -78,9 +85,15 @@ func (e *DefaultExecutor) Create(ctx context.Context, key, title, acs string, bd
 }
 
 // ParseBeadID extracts the bead ID from bd create stdout.
-// It returns the first token matching the expected bead ID format.
+// It looks for "Created issue: <id>" in the output, supporting any prefix.
 func ParseBeadID(stdout string) string {
-	re := regexp.MustCompile(`\bbd-[a-zA-Z0-9][a-zA-Z0-9_-]*\b`)
+	// Match "Created issue: <id>" pattern from bd output
+	createdRe := regexp.MustCompile(`Created issue:\s+([a-zA-Z0-9][a-zA-Z0-9_-]*)`)
+	if m := createdRe.FindStringSubmatch(stdout); m != nil {
+		return m[1]
+	}
+	// Fallback: match any word with a hyphen (prefix-hash pattern)
+	re := regexp.MustCompile(`\b[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9][a-zA-Z0-9_-]*\b`)
 	for _, line := range strings.Split(stdout, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {

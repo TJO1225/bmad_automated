@@ -117,6 +117,36 @@ func TestEpicCommand_PreconditionFailureExitsCode2(t *testing.T) {
 	assert.Equal(t, 2, code, "precondition failure should exit with code 2")
 }
 
+func TestEpicCommand_EmptyBacklogExitsCode0(t *testing.T) {
+	dir := t.TempDir()
+
+	statusDir := filepath.Dir(filepath.Join(dir, status.DefaultStatusPath))
+	require.NoError(t, os.MkdirAll(statusDir, 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, status.DefaultStatusPath),
+		[]byte(`story_location: "{project-root}/_bmad-output/implementation-artifacts"
+development_status:
+  1-1-a: done
+  1-2-b: done
+`),
+		0644,
+	))
+
+	var buf bytes.Buffer
+	app := &App{
+		Config:             config.DefaultConfig(),
+		Printer:            output.NewPrinterWithWriter(&buf),
+		CheckPreconditions: func(string) error { return nil },
+	}
+
+	rootCmd := NewRootCommand(app)
+	rootCmd.SetArgs([]string{"epic", "1", "--project-dir", dir})
+	err := rootCmd.Execute()
+	require.NoError(t, err, "no backlog stories should exit with code 0")
+
+	assert.Contains(t, buf.String(), "No backlog stories")
+}
+
 func TestEpicCommand_DryRunPropagated(t *testing.T) {
 	dir := t.TempDir()
 

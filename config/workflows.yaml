@@ -1,6 +1,6 @@
 workflows:
   create-story:
-    prompt_template: "/bmad:bmm:workflows:create-story - Create story: {{.StoryKey}}. Do not ask questions."
+    prompt_template: "/bmad-create-story - Create story: {{.StoryKey}}. Do not ask questions."
 
 claude:
   output_format: stream-json

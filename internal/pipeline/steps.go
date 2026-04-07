@@ -22,7 +22,8 @@ const (
 	stepNameSync       = "sync"
 
 	// DefaultTimeout is the maximum duration for a single Claude subprocess.
-	DefaultTimeout = 5 * time.Minute
+	// Set high enough for complex skills that do research (create-story, dev-story).
+	DefaultTimeout = 15 * time.Minute
 )
 
 // Pipeline orchestrates multi-step story processing workflows.
@@ -363,16 +364,6 @@ func (p *Pipeline) stepSync(ctx context.Context, key string) (StepResult, error)
 		}, nil
 	}
 
-	acs, err := beads.ExtractAcceptanceCriteria(string(content))
-	if err != nil {
-		return StepResult{
-			Name:     stepNameSync,
-			Success:  false,
-			Reason:   fmt.Sprintf("extract ACs: %v", err),
-			Duration: time.Since(start),
-		}, nil
-	}
-
 	var bdOut io.Writer
 	var lineW *printerLineWriter
 	if p.verbose && p.printer != nil {
@@ -380,7 +371,7 @@ func (p *Pipeline) stepSync(ctx context.Context, key string) (StepResult, error)
 		bdOut = lineW
 	}
 
-	beadID, err := p.beads.Create(ctx, key, title, acs, bdOut)
+	beadID, err := p.beads.Create(ctx, key, title, storyPath, bdOut)
 	if lineW != nil {
 		lineW.flush()
 	}

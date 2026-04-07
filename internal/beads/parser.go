@@ -26,17 +26,20 @@ func ExtractTitle(content string) (string, error) {
 
 // ExtractAcceptanceCriteria extracts the content of the "## Acceptance Criteria"
 // section from a story markdown file. It captures all content between the
-// "## Acceptance Criteria" heading and the next "## " heading (or EOF).
+// "## Acceptance Criteria" heading (with optional suffix like "(BDD)") and
+// the next "## " heading (or EOF).
 func ExtractAcceptanceCriteria(content string) (string, error) {
-	const heading = "## Acceptance Criteria"
-
-	idx := strings.Index(content, heading)
-	if idx == -1 {
+	// Match "## Acceptance Criteria" with any optional suffix on the same line
+	acRegex := regexp.MustCompile(`(?m)^## Acceptance Criteria[^\n]*$`)
+	loc := acRegex.FindStringIndex(content)
+	if loc == nil {
 		return "", fmt.Errorf("no '## Acceptance Criteria' section found")
 	}
 
+	headingEnd := loc[1]
+
 	// Start after the heading line
-	start := idx + len(heading)
+	start := headingEnd
 	// Skip past the rest of the heading line (in case of trailing whitespace)
 	if nlIdx := strings.Index(content[start:], "\n"); nlIdx != -1 {
 		start += nlIdx + 1

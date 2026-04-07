@@ -128,12 +128,12 @@ func TestStepValidate(t *testing.T) {
 			wantErrContains: "claude execution failed",
 		},
 		{
-			name:         "claude non-zero exit is operational failure",
-			exitCodes:       []int{1},
-			createFile:      true,
-			wantSuccess:     false,
-			wantReason:      "validate story 1-2-test-story: claude exited with code 1",
-			wantLoops:       1,
+			name:        "claude non-zero exit is operational failure",
+			exitCodes:   []int{1},
+			createFile:  true,
+			wantSuccess: false,
+			wantReason:  "validate story 1-2-test-story: claude exited with code 1",
+			wantLoops:   1,
 		},
 		{
 			name:            "missing story file returns error",
@@ -532,7 +532,7 @@ func TestStepSync_Success(t *testing.T) {
 	require.Len(t, mock.Calls, 1)
 	assert.Equal(t, "1-2-database-schema", mock.Calls[0].Key)
 	assert.Equal(t, "Database Schema", mock.Calls[0].Title)
-	assert.NotEmpty(t, mock.Calls[0].ACs)
+	assert.NotEmpty(t, mock.Calls[0].StoryPath)
 
 	// Verify tracking comment was appended
 	content, err := os.ReadFile(storyPath)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"story-factory/internal/beads"
 	"story-factory/internal/claude"
 	"story-factory/internal/output"
 	"story-factory/internal/pipeline"
@@ -54,6 +55,11 @@ func newEpicCommand(app *App) *cobra.Command {
 				}
 			}
 
+			if len(storyKeys) == 0 {
+				app.Printer.Text("No backlog stories for epic " + args[0])
+				return nil
+			}
+
 			app.Printer.QueueHeader(len(storyKeys), storyKeys)
 
 			// Construct executor with project working directory
@@ -64,6 +70,9 @@ func newEpicCommand(app *App) *cobra.Command {
 				GracePeriod:  5 * time.Second,
 			})
 
+			// Construct beads executor with project working directory
+			bdExecutor := &beads.DefaultExecutor{WorkingDir: projectDir}
+
 			// Construct pipeline with all dependencies
 			p := pipeline.NewPipeline(
 				executor,
@@ -71,7 +80,7 @@ func newEpicCommand(app *App) *cobra.Command {
 				projectDir,
 				pipeline.WithStatus(reader),
 				pipeline.WithPrinter(app.Printer),
-				pipeline.WithBeads(app.BeadsExecutor),
+				pipeline.WithBeads(bdExecutor),
 				pipeline.WithDryRun(app.DryRun),
 				pipeline.WithVerbose(app.Verbose),
 			)

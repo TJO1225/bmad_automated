@@ -26,6 +26,13 @@
 - Non-scalar development_status values silently produce empty Status — `Read()` accesses `.Value` on value nodes without checking `Kind == ScalarNode`; a nested mapping value would produce `Status("")` silently [internal/status/reader.go:100]
 - Unclassified keys default to EntryTypeStory with zero epic/story numbers — any key not matching the three regexes (typo, new format) is silently treated as a story with EpicNum=0, StoryNum=0; no way for callers to distinguish from a real entry [internal/status/reader.go:259-261]
 
+## Deferred from: code review of 3-4-structured-summary-and-exit-codes (2026-04-07)
+
+- CLI pre-reads status for header display, then pipeline re-reads creating a TOCTOU window — header count may not match actual processed stories if status file changes between reads [internal/cli/epic.go:49-63, internal/cli/queue.go:38-47]
+- `formatStoryRow` displays bare `:` with no step/reason when a failed StoryResult has empty FailedAt and Reason fields — current callers always populate these, but no guard exists [internal/output/printer.go:827]
+- `truncateString` panics with negative slice index when maxLen < 3 and string is longer than maxLen — only called with maxLen=50 today [internal/output/printer.go]
+- `IsExitError` uses direct type assertion `err.(*ExitError)` instead of `errors.As` — wrapping an ExitError silently loses exit code semantics [internal/cli/errors.go]
+
 ## Deferred from: code review of 3-1-epic-batch-command.md (2026-04-06)
 
 - `RunQueue` shipped in `internal/pipeline/batch.go` before Story 3-2; Story 3-1 text said not to add it yet, but `queue` CLI already calls `RunQueue` — explicitly accept or relocate in Story 3-2 scope rather than debating as a 3-1-only defect

@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"story-factory/internal/beads"
 	"story-factory/internal/claude"
 	"story-factory/internal/pipeline"
 	"story-factory/internal/status"
@@ -41,6 +42,9 @@ func newRunCommand(app *App) *cobra.Command {
 				GracePeriod:  5 * time.Second,
 			})
 
+			// Construct beads executor with project working directory
+			bdExecutor := &beads.DefaultExecutor{WorkingDir: projectDir}
+
 			// Construct pipeline with all dependencies
 			p := pipeline.NewPipeline(
 				executor,
@@ -48,7 +52,7 @@ func newRunCommand(app *App) *cobra.Command {
 				projectDir,
 				pipeline.WithStatus(status.NewReader(projectDir)),
 				pipeline.WithPrinter(app.Printer),
-				pipeline.WithBeads(app.BeadsExecutor),
+				pipeline.WithBeads(bdExecutor),
 				pipeline.WithDryRun(app.DryRun),
 				pipeline.WithVerbose(app.Verbose),
 			)

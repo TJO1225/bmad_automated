@@ -380,6 +380,7 @@ func TestDefaultPrinter_BatchSummary_WithSkipped(t *testing.T) {
 	assert.Contains(t, out, "bd not found")
 	assert.Contains(t, out, "Skip: 1")
 	assert.Contains(t, out, "Failed: 1")
+	assert.Contains(t, out, "1 skipped")
 }
 
 func TestTruncateString(t *testing.T) {

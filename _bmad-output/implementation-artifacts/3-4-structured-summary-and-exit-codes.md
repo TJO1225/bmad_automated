@@ -1,6 +1,6 @@
 # Story 3.4: Structured Summary & Exit Codes
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -458,3 +458,14 @@ None — clean implementation with no blocking issues.
 ### Change Log
 
 - 2026-04-07: Implemented structured batch summary with per-story details, epic-grouped display, and exit code verification tests
+
+### Review Findings
+
+- [x] [Review][Patch] `epicNumFromKey` dead code branch — `if len(parts) >= 1` always true; `return 0` unreachable [internal/output/printer.go:840] — fixed
+- [x] [Review][Patch] `BatchSummary` per-epic subtotals omit skipped count — line shows "Epic N: X created, Y failed" but skipped stories vanish from subtotal [internal/output/printer.go:807] — fixed, now shows ", N skipped" when skipped > 0
+- [x] [Review][Patch] Empty results render noisy summary box — no backlog stories should short-circuit instead of rendering all-zero summary [internal/cli/epic.go, internal/cli/queue.go] — fixed, early return with message
+- [x] [Review][Patch] No test for empty backlog epic — doc says "exit code 0 if no backlog stories" but path untested [internal/cli/epic_test.go] — fixed, added TestEpicCommand_EmptyBacklogExitsCode0
+- [x] [Review][Defer] CLI pre-reads status creating TOCTOU window with pipeline re-read [internal/cli/epic.go:49-63, internal/cli/queue.go:38-47] — deferred, pre-existing architecture pattern
+- [x] [Review][Defer] `formatStoryRow` shows bare `:` for empty FailedAt/Reason on failed results [internal/output/printer.go:827] — deferred, current callers always populate
+- [x] [Review][Defer] `truncateString` panics when maxLen < 3 [internal/output/printer.go] — deferred, pre-existing, only called with maxLen=50
+- [x] [Review][Defer] `IsExitError` uses direct type assertion instead of `errors.As` [internal/cli/errors.go] — deferred, pre-existing pattern
