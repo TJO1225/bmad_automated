@@ -147,7 +147,13 @@ func (p *DefaultPrinter) SessionStart() {
 
 // SessionEnd prints session end with status.
 func (p *DefaultPrinter) SessionEnd(duration time.Duration, success bool) {
-	p.writeln("%s Session complete", iconInProgress)
+	statusIcon := iconError
+	statusText := "Session failed"
+	if success {
+		statusIcon = iconSuccess
+		statusText = "Session complete"
+	}
+	p.writeln("%s %s (%s)", statusIcon, statusText, duration.Round(time.Millisecond))
 }
 
 // StepStart prints step start header.
@@ -158,7 +164,13 @@ func (p *DefaultPrinter) StepStart(step, total int, name string) {
 
 // StepEnd prints step completion status.
 func (p *DefaultPrinter) StepEnd(duration time.Duration, success bool) {
-	// Step end is usually handled by CommandFooter
+	statusIcon := iconError
+	statusText := "failed"
+	if success {
+		statusIcon = iconSuccess
+		statusText = "done"
+	}
+	p.writeln("%s Step %s (%s)", statusIcon, statusText, duration.Round(time.Millisecond))
 }
 
 // ToolUse prints tool invocation details.

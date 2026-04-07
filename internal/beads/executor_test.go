@@ -32,9 +32,19 @@ func TestParseBeadID(t *testing.T) {
 			want:   "bd-trimmed",
 		},
 		{
-			name:   "multiple lines takes first",
-			stdout: "bd-first\nsome other output\n",
+			name:   "multiple lines takes first matching bead id",
+			stdout: "INFO creating bead\nbd-first\nsome other output\n",
 			want:   "bd-first",
+		},
+		{
+			name:   "extracts bead id embedded in line",
+			stdout: "Created bead: bd-abc123 successfully\n",
+			want:   "bd-abc123",
+		},
+		{
+			name:   "ignores non-matching first line",
+			stdout: "created successfully\nid: bd-real-1\n",
+			want:   "bd-real-1",
 		},
 		{
 			name:   "empty stdout",

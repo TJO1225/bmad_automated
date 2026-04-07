@@ -128,11 +128,12 @@ func TestStepValidate(t *testing.T) {
 			wantErrContains: "claude execution failed",
 		},
 		{
-			name:            "claude non-zero exit returns error",
+			name:         "claude non-zero exit is operational failure",
 			exitCodes:       []int{1},
 			createFile:      true,
-			wantErr:         true,
-			wantErrContains: "claude exited with code 1",
+			wantSuccess:     false,
+			wantReason:      "validate story 1-2-test-story: claude exited with code 1",
+			wantLoops:       1,
 		},
 		{
 			name:            "missing story file returns error",

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -77,12 +78,16 @@ func (e *DefaultExecutor) Create(ctx context.Context, key, title, acs string, bd
 }
 
 // ParseBeadID extracts the bead ID from bd create stdout.
-// It returns the first non-empty line, trimmed of whitespace.
+// It returns the first token matching the expected bead ID format.
 func ParseBeadID(stdout string) string {
+	re := regexp.MustCompile(`\bbd-[a-zA-Z0-9][a-zA-Z0-9_-]*\b`)
 	for _, line := range strings.Split(stdout, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			return trimmed
+		if trimmed == "" {
+			continue
+		}
+		if match := re.FindString(trimmed); match != "" {
+			return match
 		}
 	}
 	return ""

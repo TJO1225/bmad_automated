@@ -38,6 +38,18 @@ func TestDefaultPrinter_SessionEnd(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "Session complete")
+	assert.Contains(t, output, "5s")
+}
+
+func TestDefaultPrinter_StepEnd(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	p.StepEnd(1500*time.Millisecond, true)
+
+	output := buf.String()
+	assert.Contains(t, output, "Step done")
+	assert.Contains(t, output, "1.5s")
 }
 
 func TestDefaultPrinter_StepStart(t *testing.T) {

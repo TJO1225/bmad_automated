@@ -287,7 +287,13 @@ func (p *Pipeline) StepValidate(ctx context.Context, key string) (StepResult, er
 			}
 		}
 		if exitCode != 0 {
-			return StepResult{}, fmt.Errorf("stepValidate: claude exited with code %d", exitCode)
+			return StepResult{
+				Name:            stepNameValidate,
+				Success:         false,
+				Reason:          fmt.Sprintf("validate story %s: claude exited with code %d", key, exitCode),
+				Duration:        time.Since(start),
+				ValidationLoops: loop,
+			}, nil
 		}
 
 		// Stat after invocation
