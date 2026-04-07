@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-just build              # Build binary to ./bmad-automate
+just build              # Build binary to ./story-factory
 just test               # Run all tests
 just test-verbose       # Run tests with verbose output
 just test-pkg ./internal/claude  # Test specific package
@@ -17,22 +17,20 @@ just run --help         # Build and run with arguments
 
 ## Architecture
 
-This is a CLI tool that orchestrates Claude CLI to run automated development workflows. It spawns Claude as a subprocess, parses its streaming JSON output, and displays formatted results.
+This is a CLI tool that orchestrates Claude CLI to run automated story processing pipelines. It spawns Claude as a subprocess, parses its streaming JSON output, and displays formatted results.
 
 ### Package Dependencies
 
 ```text
-cmd/bmad-automate/main.go
+cmd/story-factory/main.go
          │
          ▼
-    internal/cli (Cobra commands)
+    internal/cli (root command only, no subcommands yet)
          │
-         ├──► internal/workflow (orchestration)
-         │         │
-         │         ├──► internal/claude (Claude execution + JSON parsing)
-         │         └──► internal/output (terminal formatting)
-         │
-         └──► internal/config (Viper configuration)
+         ├──► internal/claude (Claude execution + JSON parsing)
+         ├──► internal/config (Viper configuration)
+         ├──► internal/output (terminal formatting)
+         └──► internal/status (sprint status reader)
 ```
 
 ### Key Interfaces for Testing
@@ -44,7 +42,7 @@ cmd/bmad-automate/main.go
 
 1. CLI command receives story key
 2. `config.Config.GetPrompt()` expands Go template with `{{.StoryKey}}`
-3. `workflow.Runner` calls `claude.Executor.ExecuteWithResult()`
+3. `claude.Executor.ExecuteWithResult()` runs Claude CLI
 4. `claude.Parser` reads streaming JSON, emits `Event` structs
 5. `output.Printer` formats and displays events
 
@@ -54,4 +52,4 @@ Workflow prompts are in `config/workflows.yaml` using Go templates. Config loads
 
 ### Claude CLI Integration
 
-The executor always passes `--dangerously-skip-permissions` and `--output-format stream-json`. Each JSON line from stdout is parsed into `StreamEvent` structs, then converted to the higher-level `Event` type with convenience methods (`IsText()`, `IsToolUse()`, `IsToolResult()`).
+The executor always passes `--enable-auto-mode` and `--output-format stream-json`. Each JSON line from stdout is parsed into `StreamEvent` structs, then converted to the higher-level `Event` type with convenience methods (`IsText()`, `IsToolUse()`, `IsToolResult()`).

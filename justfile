@@ -1,5 +1,5 @@
 # Binary name
-binary_name := "bmad-automate"
+binary_name := "story-factory"
 
 # Default recipe - show help
 default:
@@ -7,11 +7,11 @@ default:
 
 # Build the application
 build:
-    go build -o {{binary_name}} ./cmd/bmad-automate
+    go build -o {{binary_name}} ./cmd/story-factory
 
 # Install the binary to $GOPATH/bin
 install:
-    go install ./cmd/bmad-automate
+    go install ./cmd/story-factory
 
 # Run all tests
 test:

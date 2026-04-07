@@ -1,4 +1,4 @@
-// Package cli provides the command-line interface for bmad-automate.
+// Package cli provides the command-line interface for story-factory.
 //
 // The cli package implements Cobra-based commands for orchestrating
 // automated development workflows. It uses dependency injection via the
@@ -7,75 +7,45 @@
 //
 // Key types:
 //   - [App] - Main application container with injected dependencies
-//   - [WorkflowRunner] - Interface for executing named workflows or raw prompts
 //   - [StatusReader] - Interface for reading story status from sprint-status.yaml
-//   - [StatusWriter] - Interface for updating story status
 //   - [ExecuteResult] - Result type returned by testable entry points
-//
-// Commands provided:
-//   - run - Execute full story lifecycle from current status to done
-//   - queue - Run lifecycle for multiple stories sequentially
-//   - epic - Run all stories in an epic
-//   - raw - Execute a raw prompt directly
-//   - create-story, dev-story, code-review, git-commit - Individual workflow commands
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"bmad-automate/internal/claude"
-	"bmad-automate/internal/config"
-	"bmad-automate/internal/output"
-	"bmad-automate/internal/status"
-	"bmad-automate/internal/workflow"
+	"story-factory/internal/claude"
+	"story-factory/internal/config"
+	"story-factory/internal/output"
+	"story-factory/internal/status"
 )
-
-// WorkflowRunner is the interface for executing development workflows.
-//
-// Implementations must handle workflow execution, output formatting, and
-// return appropriate exit codes. The production implementation is
-// [workflow.Runner], which orchestrates Claude CLI subprocess execution.
-//
-// Methods:
-//   - RunSingle executes a named workflow (e.g., "create-story", "dev-story")
-//     with a story key for template expansion
-//   - RunRaw executes a raw prompt directly without workflow lookup
-type WorkflowRunner interface {
-	// RunSingle executes the named workflow for the given story key.
-	// Returns 0 on success, non-zero on failure.
-	RunSingle(ctx context.Context, workflowName, storyKey string) int
-
-	// RunRaw executes a raw prompt directly without workflow lookup.
-	// Returns 0 on success, non-zero on failure.
-	RunRaw(ctx context.Context, prompt string) int
-}
 
 // StatusReader is the interface for reading story status from sprint-status.yaml.
 //
 // The production implementation is [status.Reader], which parses the YAML
 // file at _bmad-output/implementation-artifacts/sprint-status.yaml.
 type StatusReader interface {
-	// GetStoryStatus returns the current status of the given story key.
-	// Returns an error if the story key is not found or the file cannot be read.
-	GetStoryStatus(storyKey string) (status.Status, error)
+	// BacklogStories returns all story entries with backlog status,
+	// sorted by epic number then story number.
+	BacklogStories() ([]status.Entry, error)
 
-	// GetEpicStories returns all story keys belonging to the given epic ID.
-	// Story keys are sorted numerically by story number for predictable execution order.
-	GetEpicStories(epicID string) ([]string, error)
-}
+	// StoriesByStatus returns all story entries matching the given status,
+	// sorted by epic number then story number.
+	StoriesByStatus(status string) ([]status.Entry, error)
 
-// StatusWriter is the interface for updating story status in sprint-status.yaml.
-//
-// The production implementation is [status.Writer], which updates the YAML
-// file atomically using temp file + rename to prevent corruption.
-type StatusWriter interface {
-	// UpdateStatus updates the status of the given story key to newStatus.
-	// Returns an error if the story key is not found or the file cannot be written.
-	UpdateStatus(storyKey string, newStatus status.Status) error
+	// StoriesForEpic returns all story entries for the given epic number,
+	// sorted by story number.
+	StoriesForEpic(n int) ([]status.Entry, error)
+
+	// StoryByKey returns the entry matching the given key, or status.ErrStoryNotFound.
+	StoryByKey(key string) (*status.Entry, error)
+
+	// ResolveStoryLocation resolves the story_location path template from
+	// sprint-status.yaml by replacing {project-root} with the given project directory.
+	ResolveStoryLocation(projectDir string) (string, error)
 }
 
 // App is the main application container with dependency injection.
@@ -84,14 +54,6 @@ type StatusWriter interface {
 // testing by substituting mock implementations. The production constructor
 // [NewApp] wires up real implementations; tests can construct App directly
 // with mock dependencies.
-//
-// Fields:
-//   - Config: Application configuration loaded from workflows.yaml and environment
-//   - Executor: Claude CLI executor for subprocess management
-//   - Printer: Terminal output formatter using Lipgloss styles
-//   - Runner: Workflow execution engine
-//   - StatusReader: Sprint status file reader
-//   - StatusWriter: Sprint status file writer
 type App struct {
 	// Config holds application configuration including workflow definitions.
 	Config *config.Config
@@ -102,22 +64,15 @@ type App struct {
 	// Printer formats and displays output to the terminal.
 	Printer output.Printer
 
-	// Runner executes named workflows or raw prompts.
-	Runner WorkflowRunner
-
 	// StatusReader reads story status from sprint-status.yaml.
 	StatusReader StatusReader
-
-	// StatusWriter updates story status in sprint-status.yaml.
-	StatusWriter StatusWriter
 }
 
 // NewApp creates a new [App] with all production dependencies wired up.
 //
 // This constructor initializes:
 //   - A [claude.Executor] configured from cfg.Claude settings
-//   - A [workflow.Runner] for workflow execution
-//   - A [status.Reader] and [status.Writer] for sprint status management
+//   - A [status.Reader] for sprint status management
 //   - An [output.Printer] for terminal output
 //
 // For testing, construct [App] directly with mock dependencies instead.
@@ -128,57 +83,32 @@ func NewApp(cfg *config.Config) *App {
 		BinaryPath:   cfg.Claude.BinaryPath,
 		OutputFormat: cfg.Claude.OutputFormat,
 		StderrHandler: func(line string) {
-			// Print stderr to stderr
 			os.Stderr.WriteString("[stderr] " + line + "\n")
 		},
 	})
 
-	runner := workflow.NewRunner(executor, printer, cfg)
 	statusReader := status.NewReader("")
-	statusWriter := status.NewWriter("")
 
 	return &App{
 		Config:       cfg,
 		Executor:     executor,
 		Printer:      printer,
-		Runner:       runner,
 		StatusReader: statusReader,
-		StatusWriter: statusWriter,
 	}
 }
 
-// NewRootCommand creates the root Cobra command with all subcommands attached.
+// NewRootCommand creates the root Cobra command.
 //
-// The command tree includes:
-//   - run: Execute full story lifecycle from current status to done
-//   - queue: Run lifecycle for multiple stories sequentially
-//   - epic: Run all stories in an epic
-//   - raw: Execute a raw prompt directly
-//   - create-story: Create a new story from backlog status
-//   - dev-story: Develop a story (ready-for-dev or in-progress status)
-//   - code-review: Review code (review status)
-//   - git-commit: Commit changes after review
+// No subcommands are registered; those will be added in later stories.
 func NewRootCommand(app *App) *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "bmad-automate",
-		Short: "BMAD Automation CLI",
-		Long: `BMAD Automation CLI - Automate development workflows with Claude.
+		Use:   "story-factory",
+		Short: "Story Factory CLI",
+		Long: `Story Factory CLI - Automate story processing pipelines with Claude.
 
-This tool orchestrates Claude to run development workflows including
-story creation, development, code review, and git operations.`,
+This tool orchestrates Claude to run story processing pipelines including
+story creation, validation, development, and review.`,
 	}
-
-	// Add subcommands
-	rootCmd.AddCommand(
-		newCreateStoryCommand(app),
-		newDevStoryCommand(app),
-		newCodeReviewCommand(app),
-		newGitCommitCommand(app),
-		newRunCommand(app),
-		newQueueCommand(app),
-		newEpicCommand(app),
-		newRawCommand(app),
-	)
 
 	return rootCmd
 }
@@ -211,11 +141,9 @@ func RunWithConfig(cfg *config.Config) ExecuteResult {
 	rootCmd := NewRootCommand(app)
 
 	if err := rootCmd.Execute(); err != nil {
-		// Check if it's an ExitError from a command
 		if code, ok := IsExitError(err); ok {
 			return ExecuteResult{ExitCode: code, Err: err}
 		}
-		// Other errors (e.g., unknown command) - exit code 1
 		return ExecuteResult{ExitCode: 1, Err: err}
 	}
 	return ExecuteResult{ExitCode: 0, Err: nil}

@@ -1,4 +1,4 @@
-// Package status provides functionality for reading and writing sprint status YAML files.
+// Package status provides functionality for reading sprint status YAML files.
 //
 // The sprint-status.yaml file tracks the development status of stories throughout
 // their lifecycle. Each story progresses through statuses: backlog -> ready-for-dev ->
@@ -6,13 +6,18 @@
 //
 // Key types:
 //   - [Status] - Story development status enum with validation
-//   - [SprintStatus] - Parsed representation of sprint-status.yaml
+//   - [EntryType] - Classification for development_status entries (epic, story, retrospective)
+//   - [Entry] - A single parsed entry from the development_status map
 //   - [Reader] - Reads and queries sprint status from YAML files
-//   - [Writer] - Updates status values while preserving YAML formatting
 //
-// The package uses yaml.v3's Node API for writes to preserve comments, ordering,
-// and formatting in the status file.
+// The package uses yaml.v3's Node API to preserve entry ordering when parsing
+// the status file.
 package status
+
+import "errors"
+
+// ErrStoryNotFound is returned when a story key is not found in the sprint status file.
+var ErrStoryNotFound = errors.New("story not found")
 
 // Status represents a story's development status in the workflow lifecycle.
 //
@@ -20,7 +25,6 @@ package status
 // backlog -> ready-for-dev -> in-progress -> review -> done.
 //
 // The status determines which workflow command is executed when running a story.
-// See the internal/router package for status-to-workflow mapping.
 type Status string
 
 // Status constants define the valid development statuses in the story lifecycle.
@@ -57,12 +61,40 @@ func (s Status) IsValid() bool {
 	}
 }
 
-// SprintStatus represents the parsed contents of a sprint-status.yaml file.
-//
-// The file structure contains a development_status map where keys are story
-// identifiers (e.g., "7-1-define-schema") and values are their current [Status].
-type SprintStatus struct {
-	// DevelopmentStatus maps story keys to their current development status.
-	// Story keys follow the pattern: {epicID}-{storyNum}-{description}.
-	DevelopmentStatus map[string]Status `yaml:"development_status"`
+// EntryType classifies a development_status entry.
+type EntryType int
+
+const (
+	// EntryTypeEpic represents an epic entry (key pattern: epic-N).
+	EntryTypeEpic EntryType = iota
+
+	// EntryTypeStory represents a story entry (key pattern: N-M-slug).
+	EntryTypeStory
+
+	// EntryTypeRetrospective represents a retrospective entry (key pattern: epic-N-retrospective).
+	EntryTypeRetrospective
+)
+
+// String returns a human-readable representation of the EntryType.
+func (t EntryType) String() string {
+	switch t {
+	case EntryTypeEpic:
+		return "epic"
+	case EntryTypeStory:
+		return "story"
+	case EntryTypeRetrospective:
+		return "retrospective"
+	default:
+		return "unknown"
+	}
+}
+
+// Entry represents a single parsed entry from the development_status map.
+type Entry struct {
+	Key      string    // Raw key, e.g. "1-2-sprint-status-yaml-parser"
+	Status   Status    // Parsed status value
+	Type     EntryType // Classified type
+	EpicNum  int       // Epic number (all types have this)
+	StoryNum int       // Story number (only EntryTypeStory, 0 for others)
+	Slug     string    // Slug portion (only EntryTypeStory, empty for others)
 }

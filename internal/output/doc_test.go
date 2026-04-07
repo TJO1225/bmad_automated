@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"bmad-automate/internal/output"
+	"story-factory/internal/output"
 )
 
 // Example_printer demonstrates the Printer interface methods for terminal output.

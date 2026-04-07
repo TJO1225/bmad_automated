@@ -5,11 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"bmad-automate/internal/status"
+	"story-factory/internal/status"
 )
 
-// This example demonstrates using Reader to read sprint status from YAML files.
-// The reader queries story statuses and retrieves epic story lists.
+// This example demonstrates using Reader to parse sprint status and classify entries.
 func Example_reader() {
 	// Create a temporary directory with a sample sprint-status.yaml
 	tmpDir, err := os.MkdirTemp("", "status-reader")
@@ -28,9 +27,11 @@ func Example_reader() {
 
 	// Write a sample sprint-status.yaml
 	statusYAML := `development_status:
-  7-1-define-schema: backlog
-  7-2-add-api: ready-for-dev
-  7-3-add-tests: done
+  epic-1: in-progress
+  1-1-define-schema: done
+  1-2-add-api: ready-for-dev
+  1-3-add-tests: backlog
+  epic-1-retrospective: optional
 `
 	statusFile := filepath.Join(statusDir, "sprint-status.yaml")
 	if err := os.WriteFile(statusFile, []byte(statusYAML), 0644); err != nil {
@@ -38,51 +39,51 @@ func Example_reader() {
 		return
 	}
 
-	// Create a reader with the temp directory as base path
 	reader := status.NewReader(tmpDir)
 
-	// GetStoryStatus returns the status for a specific story
-	s, err := reader.GetStoryStatus("7-1-define-schema")
+	// Read returns all classified entries in YAML file order
+	entries, err := reader.Read()
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
-	fmt.Println("Story 7-1 status:", s)
+	fmt.Println("Total entries:", len(entries))
+	fmt.Println("First entry type:", entries[0].Type)
 
-	// Read returns the full sprint status structure
-	sprint, err := reader.Read()
+	// StoryByKey looks up a specific entry
+	entry, err := reader.StoryByKey("1-2-add-api")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
-	fmt.Println("Total stories:", len(sprint.DevelopmentStatus))
+	fmt.Println("Story 1-2 status:", entry.Status)
 	// Output:
-	// Story 7-1 status: backlog
-	// Total stories: 3
+	// Total entries: 5
+	// First entry type: epic
+	// Story 1-2 status: ready-for-dev
 }
 
-// This example demonstrates using Writer to update story statuses in YAML files.
-// The writer preserves formatting and uses atomic writes for safety.
-func Example_writer() {
-	// Create a temporary directory with a sample sprint-status.yaml
-	tmpDir, err := os.MkdirTemp("", "status-writer")
+// This example demonstrates querying backlog stories and filtering by epic.
+func Example_queries() {
+	tmpDir, err := os.MkdirTemp("", "status-queries")
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create the status file path structure
 	statusDir := filepath.Join(tmpDir, "_bmad-output", "implementation-artifacts")
 	if err := os.MkdirAll(statusDir, 0755); err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
-	// Write a sample sprint-status.yaml
 	statusYAML := `development_status:
-  7-1-define-schema: backlog
-  7-2-add-api: ready-for-dev
+  epic-1: in-progress
+  1-1-define-schema: done
+  1-2-add-api: backlog
+  epic-2: backlog
+  2-1-setup-auth: backlog
 `
 	statusFile := filepath.Join(statusDir, "sprint-status.yaml")
 	if err := os.WriteFile(statusFile, []byte(statusYAML), 0644); err != nil {
@@ -90,27 +91,61 @@ func Example_writer() {
 		return
 	}
 
-	// Read initial status
 	reader := status.NewReader(tmpDir)
-	initial, _ := reader.GetStoryStatus("7-1-define-schema")
-	fmt.Println("Initial status:", initial)
 
-	// Create a writer and update the status
-	writer := status.NewWriter(tmpDir)
-	if err := writer.UpdateStatus("7-1-define-schema", status.StatusInProgress); err != nil {
+	// StoriesByStatus returns stories matching any status string
+	backlog, err := reader.StoriesByStatus("backlog")
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	fmt.Println("Backlog stories:", len(backlog))
+
+	// StoriesForEpic returns stories belonging to a specific epic
+	epic1Stories, err := reader.StoriesForEpic(1)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	fmt.Println("Epic 1 stories:", len(epic1Stories))
+	// Output:
+	// Backlog stories: 2
+	// Epic 1 stories: 2
+}
+
+// This example demonstrates resolving the story file location path.
+func Example_resolveStoryLocation() {
+	tmpDir, err := os.MkdirTemp("", "status-resolve")
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	statusDir := filepath.Join(tmpDir, "_bmad-output", "implementation-artifacts")
+	if err := os.MkdirAll(statusDir, 0755); err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
-	// Verify the update
-	updated, _ := reader.GetStoryStatus("7-1-define-schema")
-	fmt.Println("Updated status:", updated)
+	statusYAML := `story_location: "{project-root}/_bmad-output/implementation-artifacts"
+development_status:
+  1-1-define-schema: backlog
+`
+	statusFile := filepath.Join(statusDir, "sprint-status.yaml")
+	if err := os.WriteFile(statusFile, []byte(statusYAML), 0644); err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 
-	// Invalid status values are rejected
-	err = writer.UpdateStatus("7-1-define-schema", status.Status("invalid"))
-	fmt.Println("Invalid status rejected:", err != nil)
+	reader := status.NewReader(tmpDir)
+
+	resolved, err := reader.ResolveStoryLocation("/home/tom/projects/my-app")
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	fmt.Println("Story location:", resolved)
 	// Output:
-	// Initial status: backlog
-	// Updated status: in-progress
-	// Invalid status rejected: true
+	// Story location: /home/tom/projects/my-app/_bmad-output/implementation-artifacts
 }

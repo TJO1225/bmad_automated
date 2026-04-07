@@ -1,0 +1,6 @@
+# Nested/invalid format to test rejection
+sprints:
+  - name: Sprint 1
+    stories:
+      - key: 1-1-foo
+        status: backlog

@@ -1,0 +1,7 @@
+# Valid development_status but no story_location field
+generated: 2026-04-01
+project: test-project
+
+development_status:
+  epic-1: backlog
+  1-1-some-story: backlog

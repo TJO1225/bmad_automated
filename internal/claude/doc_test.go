@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"bmad-automate/internal/claude"
+	"story-factory/internal/claude"
 )
 
 // Example_mockExecutor demonstrates using MockExecutor for testing Claude

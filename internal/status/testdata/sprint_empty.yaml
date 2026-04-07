@@ -1,0 +1,5 @@
+# Valid file with empty development_status
+generated: 2026-04-01
+project: test-project
+
+development_status: {}

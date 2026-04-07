@@ -3,7 +3,7 @@ package config_test
 import (
 	"fmt"
 
-	"bmad-automate/internal/config"
+	"story-factory/internal/config"
 )
 
 // This example demonstrates loading configuration using DefaultConfig

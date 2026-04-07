@@ -29,7 +29,7 @@ linters-settings:
     simplify: true
 
   goimports:
-    local-prefixes: bmad-automate
+    local-prefixes: story-factory
 
   misspell:
     locale: US

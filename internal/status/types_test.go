@@ -74,3 +74,22 @@ func TestStatus_Constants(t *testing.T) {
 	assert.Equal(t, Status("review"), StatusReview)
 	assert.Equal(t, Status("done"), StatusDone)
 }
+
+func TestEntryType_String(t *testing.T) {
+	tests := []struct {
+		name     string
+		t        EntryType
+		expected string
+	}{
+		{"epic", EntryTypeEpic, "epic"},
+		{"story", EntryTypeStory, "story"},
+		{"retrospective", EntryTypeRetrospective, "retrospective"},
+		{"unknown", EntryType(99), "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.t.String())
+		})
+	}
+}

@@ -1,4 +1,4 @@
-// Package config provides configuration loading and management for bmad-automate.
+// Package config provides configuration loading and management for story-factory.
 //
 // Configuration is loaded using Viper, supporting YAML config files and environment
 // variable overrides. The package provides sensible defaults that work out of the
