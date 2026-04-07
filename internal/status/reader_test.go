@@ -334,6 +334,7 @@ func TestBacklogStories_Empty(t *testing.T) {
 	stories, err := reader.BacklogStories()
 	require.NoError(t, err)
 	assert.Empty(t, stories)
+	assert.NotNil(t, stories) // must be []Entry{}, not nil
 }
 
 // --- StoriesForEpic() tests ---
@@ -371,6 +372,7 @@ func TestStoriesForEpic_NoStories(t *testing.T) {
 	stories, err := reader.StoriesForEpic(99)
 	require.NoError(t, err)
 	assert.Empty(t, stories)
+	assert.NotNil(t, stories) // must be []Entry{}, not nil
 }
 
 func TestStoriesForEpic_SingleStory(t *testing.T) {
@@ -492,6 +494,7 @@ func TestStoriesByStatus_NoMatch(t *testing.T) {
 	stories, err := reader.StoriesByStatus("review")
 	require.NoError(t, err)
 	assert.Empty(t, stories)
+	assert.NotNil(t, stories) // must be []Entry{}, not nil
 }
 
 func TestStoriesByStatus_NumericSort(t *testing.T) {
@@ -518,6 +521,7 @@ func TestStoriesByStatus_Empty(t *testing.T) {
 	stories, err := reader.StoriesByStatus("backlog")
 	require.NoError(t, err)
 	assert.Empty(t, stories)
+	assert.NotNil(t, stories) // must be []Entry{}, not nil
 }
 
 // --- ResolveStoryLocation() tests ---
@@ -586,6 +590,21 @@ func TestResolveStoryLocation_PathCleaned(t *testing.T) {
 	require.NoError(t, err)
 	// filepath.Clean removes trailing slash
 	assert.Equal(t, "/home/tom/_bmad-output/implementation-artifacts", resolved)
+}
+
+func TestResolveStoryLocation_EmptyValue(t *testing.T) {
+	tmpDir := t.TempDir()
+	statusDir := filepath.Join(tmpDir, "_bmad-output", "implementation-artifacts")
+	require.NoError(t, os.MkdirAll(statusDir, 0755))
+
+	content := "story_location: \"\"\ndevelopment_status: {}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(statusDir, "sprint-status.yaml"), []byte(content), 0644))
+
+	reader := NewReader(tmpDir)
+	resolved, err := reader.ResolveStoryLocation("/some/path")
+	assert.Error(t, err)
+	assert.Empty(t, resolved)
+	assert.Contains(t, err.Error(), "story_location field is empty")
 }
 
 // --- Edge case: file with only epics ---

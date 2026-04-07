@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,8 +35,26 @@ type StoryResult struct {
 	Duration time.Duration
 	// FailedAt contains the step name where processing failed, if any.
 	FailedAt string
+	// Reason is the failure description when the story failed.
+	Reason string
 	// Skipped indicates the story was skipped because it was already done.
 	Skipped bool
+	// ValidationLoops is how many validation attempts were needed.
+	ValidationLoops int
+	// BeadID is the bead identifier created during sync.
+	BeadID string
+}
+
+// BatchCounts holds pre-computed counts from a batch operation.
+//
+// Counts are populated by pipeline batch methods from the Stories slice.
+// The Printer displays these as-is without recounting.
+type BatchCounts struct {
+	Created   int
+	Validated int
+	Synced    int
+	Failed    int
+	Skipped   int
 }
 
 // Printer defines the interface for structured terminal output operations.
@@ -79,9 +98,12 @@ type Printer interface {
 	QueueHeader(count int, stories []string)
 	// QueueStoryStart prints the header when starting a story in a queue.
 	QueueStoryStart(index, total int, storyKey string)
-	// QueueSummary prints the batch results summary showing completed,
-	// skipped, failed, and remaining stories.
-	QueueSummary(results []StoryResult, allKeys []string, totalDuration time.Duration)
+	// QueueSummary prints a flat batch results summary with per-story
+	// details (validation loops, bead IDs, failure reasons) and totals.
+	QueueSummary(results []StoryResult, counts BatchCounts, totalDuration time.Duration)
+	// BatchSummary prints an epic-grouped batch results summary with
+	// per-epic headers, subtotals, and grand totals.
+	BatchSummary(results []StoryResult, counts BatchCounts, totalDuration time.Duration)
 
 	// CommandHeader prints the header before running a workflow command.
 	CommandHeader(label, prompt string, truncateLength int)
@@ -234,64 +256,109 @@ func (p *DefaultPrinter) QueueStoryStart(index, total int, storyKey string) {
 	p.writeln(queueHeaderStyle.Render(header))
 }
 
-// QueueSummary prints the summary after a queue completes or fails.
-func (p *DefaultPrinter) QueueSummary(results []StoryResult, allKeys []string, totalDuration time.Duration) {
-	completed := 0
-	failed := 0
-	skipped := 0
-	for _, r := range results {
-		if r.Skipped {
-			skipped++
-		} else if r.Success {
-			completed++
-		} else {
-			failed++
-		}
-	}
-	remaining := len(allKeys) - len(results)
-
+// QueueSummary prints a flat batch summary with per-story details.
+func (p *DefaultPrinter) QueueSummary(results []StoryResult, counts BatchCounts, totalDuration time.Duration) {
 	var sb strings.Builder
 
-	if failed == 0 && remaining == 0 {
-		sb.WriteString(successStyle.Render(iconSuccess+" QUEUE COMPLETE") + "\n")
+	if counts.Failed == 0 {
+		sb.WriteString(successStyle.Render(iconSuccess+" BATCH COMPLETE") + "\n")
 	} else {
-		sb.WriteString(errorStyle.Render(iconError+" QUEUE STOPPED") + "\n")
+		sb.WriteString(errorStyle.Render(iconError+" BATCH FAILED") + "\n")
 	}
 
-	sb.WriteString(strings.Repeat("─", 50) + "\n")
-	sb.WriteString(fmt.Sprintf("Completed: %d | Skipped: %d | Failed: %d | Remaining: %d\n", completed, skipped, failed, remaining))
 	sb.WriteString(strings.Repeat("─", 50) + "\n")
 
 	for _, r := range results {
-		var status string
-		var suffix string
-		if r.Skipped {
-			status = mutedStyle.Render("↷")
-			suffix = "(done)"
-		} else if r.Success {
-			status = successStyle.Render(iconSuccess)
-			suffix = ""
-		} else {
-			status = errorStyle.Render(iconError)
-			suffix = ""
-		}
-		if suffix != "" {
-			sb.WriteString(fmt.Sprintf("%s %-30s %s\n", status, r.Key, suffix))
-		} else {
-			sb.WriteString(fmt.Sprintf("%s %-30s %s\n", status, r.Key, r.Duration.Round(time.Second)))
-		}
-	}
-
-	if remaining > 0 {
-		for i := len(results); i < len(allKeys); i++ {
-			sb.WriteString(fmt.Sprintf("%s %-30s (pending)\n", mutedStyle.Render(iconPending), allKeys[i]))
-		}
+		sb.WriteString(formatStoryRow(r) + "\n")
 	}
 
 	sb.WriteString(strings.Repeat("─", 50) + "\n")
+	sb.WriteString(formatTotals(counts) + "\n")
 	sb.WriteString(fmt.Sprintf("Total: %s", totalDuration.Round(time.Second)))
 
 	p.writeln(summaryStyle.Render(sb.String()))
+}
+
+// BatchSummary prints an epic-grouped batch summary with per-epic subtotals.
+func (p *DefaultPrinter) BatchSummary(results []StoryResult, counts BatchCounts, totalDuration time.Duration) {
+	var sb strings.Builder
+
+	if counts.Failed == 0 {
+		sb.WriteString(successStyle.Render(iconSuccess+" QUEUE COMPLETE") + "\n")
+	} else {
+		sb.WriteString(errorStyle.Render(iconError+" QUEUE FAILED") + "\n")
+	}
+
+	// Group stories by epic number (preserves input order)
+	type epicGroup struct {
+		num     int
+		stories []StoryResult
+	}
+	var groups []epicGroup
+	seen := make(map[int]int)
+
+	for _, r := range results {
+		num := epicNumFromKey(r.Key)
+		if idx, ok := seen[num]; ok {
+			groups[idx].stories = append(groups[idx].stories, r)
+		} else {
+			seen[num] = len(groups)
+			groups = append(groups, epicGroup{num: num, stories: []StoryResult{r}})
+		}
+	}
+
+	for _, g := range groups {
+		sb.WriteString(fmt.Sprintf("\n%s\n",
+			labelStyle.Render(fmt.Sprintf("── Epic %d ──────────────────────────────────", g.num))))
+
+		created := 0
+		failed := 0
+		for _, r := range g.stories {
+			sb.WriteString(formatStoryRow(r) + "\n")
+			if r.Success {
+				created++
+			} else if !r.Skipped {
+				failed++
+			}
+		}
+
+		sb.WriteString(mutedStyle.Render(fmt.Sprintf("  Epic %d: %d created, %d failed", g.num, created, failed)) + "\n")
+	}
+
+	sb.WriteString("\n" + strings.Repeat("─", 50) + "\n")
+	sb.WriteString(formatTotals(counts) + "\n")
+	sb.WriteString(fmt.Sprintf("Total: %s", totalDuration.Round(time.Second)))
+
+	p.writeln(summaryStyle.Render(sb.String()))
+}
+
+// formatStoryRow renders a single story result row with status icon and details.
+func formatStoryRow(r StoryResult) string {
+	if r.Skipped {
+		return fmt.Sprintf("%s %-30s  %s", mutedStyle.Render("↷"), r.Key, mutedStyle.Render("(skipped)"))
+	}
+	if r.Success {
+		details := fmt.Sprintf("loops:%d  bead:%s  %s", r.ValidationLoops, r.BeadID, r.Duration.Round(time.Second))
+		return fmt.Sprintf("%s %-30s  %s", successStyle.Render(iconSuccess), r.Key, details)
+	}
+	details := fmt.Sprintf("%s: %s  %s", r.FailedAt, r.Reason, r.Duration.Round(time.Second))
+	return fmt.Sprintf("%s %-30s  %s", errorStyle.Render(iconError), r.Key, details)
+}
+
+// formatTotals renders the batch counts totals line.
+func formatTotals(c BatchCounts) string {
+	return fmt.Sprintf("Created: %d | Validated: %d | Synced: %d | Failed: %d | Skip: %d",
+		c.Created, c.Validated, c.Synced, c.Failed, c.Skipped)
+}
+
+// epicNumFromKey extracts the epic number from a story key (e.g., "3-1-slug" → 3).
+func epicNumFromKey(key string) int {
+	parts := strings.SplitN(key, "-", 3)
+	if len(parts) >= 1 {
+		n, _ := strconv.Atoi(parts[0])
+		return n
+	}
+	return 0
 }
 
 // CommandHeader prints the header before running a command.

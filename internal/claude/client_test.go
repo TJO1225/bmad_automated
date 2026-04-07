@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,14 +114,20 @@ func TestNewExecutor(t *testing.T) {
 	assert.NotNil(t, exec)
 	assert.Equal(t, "claude", exec.config.BinaryPath)
 	assert.Equal(t, "stream-json", exec.config.OutputFormat)
+	assert.Equal(t, time.Duration(0), exec.config.GracePeriod)
+	assert.Equal(t, "", exec.config.WorkingDir)
 
 	// Test custom config
 	exec = NewExecutor(ExecutorConfig{
 		BinaryPath:   "/custom/claude",
 		OutputFormat: "json",
+		WorkingDir:   "/tmp/project",
+		GracePeriod:  5 * time.Second,
 	})
 	assert.Equal(t, "/custom/claude", exec.config.BinaryPath)
 	assert.Equal(t, "json", exec.config.OutputFormat)
+	assert.Equal(t, "/tmp/project", exec.config.WorkingDir)
+	assert.Equal(t, 5*time.Second, exec.config.GracePeriod)
 }
 
 func TestNewExecutor_WithCustomParser(t *testing.T) {

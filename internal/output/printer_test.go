@@ -212,38 +212,162 @@ func TestDefaultPrinter_QueueStoryStart(t *testing.T) {
 	assert.Contains(t, output, "story-key")
 }
 
-func TestDefaultPrinter_QueueSummary_Success(t *testing.T) {
+func TestDefaultPrinter_QueueSummary_AllSuccess(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "story-1", Success: true, Duration: 10 * time.Second},
-		{Key: "story-2", Success: true, Duration: 20 * time.Second},
+		{Key: "1-1-foo", Success: true, Duration: 10 * time.Second, ValidationLoops: 1, BeadID: "abc123"},
+		{Key: "1-2-bar", Success: true, Duration: 20 * time.Second, ValidationLoops: 2, BeadID: "def456"},
 	}
+	counts := BatchCounts{Created: 2, Validated: 2, Synced: 2}
 
-	p.QueueSummary(results, []string{"story-1", "story-2"}, 30*time.Second)
+	p.QueueSummary(results, counts, 30*time.Second)
 
-	output := buf.String()
-	assert.Contains(t, output, "QUEUE COMPLETE")
-	assert.Contains(t, output, "Completed: 2")
+	out := buf.String()
+	assert.Contains(t, out, "BATCH COMPLETE")
+	assert.Contains(t, out, "loops:1")
+	assert.Contains(t, out, "bead:abc123")
+	assert.Contains(t, out, "loops:2")
+	assert.Contains(t, out, "bead:def456")
+	assert.Contains(t, out, "Created: 2")
+	assert.Contains(t, out, "Validated: 2")
+	assert.Contains(t, out, "Synced: 2")
+	assert.Contains(t, out, "Failed: 0")
 }
 
-func TestDefaultPrinter_QueueSummary_WithFailure(t *testing.T) {
+func TestDefaultPrinter_QueueSummary_MixedBatch(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "story-1", Success: true, Duration: 10 * time.Second},
-		{Key: "story-2", Success: false, Duration: 5 * time.Second, FailedAt: "dev-story"},
+		{Key: "1-1-foo", Success: true, Duration: 12 * time.Second, ValidationLoops: 2, BeadID: "abc123"},
+		{Key: "1-2-bar", FailedAt: "validate", Reason: "timed out", Duration: 18 * time.Second},
+		{Key: "1-3-baz", Skipped: true},
 	}
+	counts := BatchCounts{Created: 1, Validated: 1, Synced: 1, Failed: 1, Skipped: 1}
 
-	p.QueueSummary(results, []string{"story-1", "story-2", "story-3"}, 15*time.Second)
+	p.QueueSummary(results, counts, 30*time.Second)
 
-	output := buf.String()
-	assert.Contains(t, output, "QUEUE STOPPED")
-	assert.Contains(t, output, "Failed: 1")
-	assert.Contains(t, output, "Remaining: 1")
-	assert.Contains(t, output, "(pending)")
+	out := buf.String()
+	assert.Contains(t, out, "BATCH FAILED")
+	assert.Contains(t, out, "loops:2")
+	assert.Contains(t, out, "bead:abc123")
+	assert.Contains(t, out, "validate")
+	assert.Contains(t, out, "timed out")
+	assert.Contains(t, out, "skipped")
+	assert.Contains(t, out, "Created: 1")
+	assert.Contains(t, out, "Failed: 1")
+	assert.Contains(t, out, "Skip: 1")
+}
+
+func TestDefaultPrinter_QueueSummary_AllFailed(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	results := []StoryResult{
+		{Key: "1-1-foo", FailedAt: "create", Reason: "not found", Duration: 5 * time.Second},
+		{Key: "1-2-bar", FailedAt: "validate", Reason: "diverged", Duration: 8 * time.Second},
+	}
+	counts := BatchCounts{Failed: 2}
+
+	p.QueueSummary(results, counts, 13*time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "BATCH FAILED")
+	assert.Contains(t, out, "create")
+	assert.Contains(t, out, "not found")
+	assert.Contains(t, out, "validate")
+	assert.Contains(t, out, "diverged")
+	assert.Contains(t, out, "Failed: 2")
+	assert.Contains(t, out, "Created: 0")
+}
+
+func TestDefaultPrinter_QueueSummary_AllSkipped(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	results := []StoryResult{
+		{Key: "1-1-foo", Skipped: true},
+		{Key: "1-2-bar", Skipped: true},
+	}
+	counts := BatchCounts{Skipped: 2}
+
+	p.QueueSummary(results, counts, 1*time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "BATCH COMPLETE")
+	assert.Contains(t, out, "skipped")
+	assert.Contains(t, out, "Skip: 2")
+	assert.Contains(t, out, "Created: 0")
+}
+
+func TestDefaultPrinter_BatchSummary_EpicGrouped(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	results := []StoryResult{
+		{Key: "1-1-scaffold", Success: true, Duration: 8 * time.Second, ValidationLoops: 1, BeadID: "aaa"},
+		{Key: "1-2-schema", Success: true, Duration: 12 * time.Second, ValidationLoops: 1, BeadID: "bbb"},
+		{Key: "2-1-preconditions", Success: true, Duration: 10 * time.Second, ValidationLoops: 1, BeadID: "ccc"},
+		{Key: "2-2-creation", FailedAt: "create", Reason: "file not found", Duration: 15 * time.Second},
+	}
+	counts := BatchCounts{Created: 3, Validated: 3, Synced: 3, Failed: 1}
+
+	p.BatchSummary(results, counts, 45*time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "QUEUE FAILED")
+	assert.Contains(t, out, "Epic 1")
+	assert.Contains(t, out, "Epic 2")
+	assert.Contains(t, out, "bead:aaa")
+	assert.Contains(t, out, "bead:bbb")
+	assert.Contains(t, out, "bead:ccc")
+	assert.Contains(t, out, "file not found")
+	assert.Contains(t, out, "2 created, 0 failed")
+	assert.Contains(t, out, "1 created, 1 failed")
+	assert.Contains(t, out, "Created: 3")
+	assert.Contains(t, out, "Failed: 1")
+}
+
+func TestDefaultPrinter_BatchSummary_AllSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	results := []StoryResult{
+		{Key: "1-1-a", Success: true, Duration: 5 * time.Second, ValidationLoops: 1, BeadID: "x1"},
+		{Key: "2-1-b", Success: true, Duration: 7 * time.Second, ValidationLoops: 1, BeadID: "x2"},
+	}
+	counts := BatchCounts{Created: 2, Validated: 2, Synced: 2}
+
+	p.BatchSummary(results, counts, 12*time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "QUEUE COMPLETE")
+	assert.Contains(t, out, "Epic 1")
+	assert.Contains(t, out, "Epic 2")
+	assert.Contains(t, out, "Created: 2")
+}
+
+func TestDefaultPrinter_BatchSummary_WithSkipped(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	results := []StoryResult{
+		{Key: "1-1-a", Success: true, Duration: 5 * time.Second, ValidationLoops: 1, BeadID: "x1"},
+		{Key: "1-2-b", Skipped: true},
+		{Key: "2-1-c", FailedAt: "sync", Reason: "bd not found", Duration: 10 * time.Second},
+	}
+	counts := BatchCounts{Created: 1, Validated: 1, Synced: 1, Failed: 1, Skipped: 1}
+
+	p.BatchSummary(results, counts, 15*time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "QUEUE FAILED")
+	assert.Contains(t, out, "skipped")
+	assert.Contains(t, out, "bd not found")
+	assert.Contains(t, out, "Skip: 1")
+	assert.Contains(t, out, "Failed: 1")
 }
 
 func TestTruncateString(t *testing.T) {

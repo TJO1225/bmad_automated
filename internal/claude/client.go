@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"syscall"
+	"time"
 )
 
 // Executor runs Claude CLI and returns streaming events.
@@ -71,6 +73,16 @@ type ExecutorConfig struct {
 	// If nil, stderr output is silently discarded.
 	// Set this to capture error messages or debug output from Claude.
 	StderrHandler func(line string)
+
+	// WorkingDir sets the working directory for the Claude subprocess.
+	// If empty, the subprocess inherits the parent process's working directory.
+	WorkingDir string
+
+	// GracePeriod controls graceful shutdown behavior when the context is canceled.
+	// When > 0, context cancellation sends SIGTERM and waits GracePeriod before
+	// force-killing the process. When 0 (default), context cancellation sends
+	// SIGKILL immediately (Go's default behavior).
+	GracePeriod time.Duration
 }
 
 // DefaultExecutor implements [Executor] by spawning Claude as a subprocess.
@@ -129,6 +141,7 @@ func (e *DefaultExecutor) Execute(ctx context.Context, prompt string) (<-chan Ev
 		"-p", prompt,
 		"--output-format", e.config.OutputFormat,
 	)
+	e.applyCommandConfig(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -177,6 +190,7 @@ func (e *DefaultExecutor) ExecuteWithResult(ctx context.Context, prompt string, 
 		"-p", prompt,
 		"--output-format", e.config.OutputFormat,
 	)
+	e.applyCommandConfig(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -216,6 +230,20 @@ func (e *DefaultExecutor) ExecuteWithResult(ctx context.Context, prompt string, 
 	}
 
 	return exitCode, nil
+}
+
+// applyCommandConfig sets WorkingDir and GracePeriod on the command
+// before Start() is called.
+func (e *DefaultExecutor) applyCommandConfig(cmd *exec.Cmd) {
+	if e.config.WorkingDir != "" {
+		cmd.Dir = e.config.WorkingDir
+	}
+	if e.config.GracePeriod > 0 {
+		cmd.Cancel = func() error {
+			return cmd.Process.Signal(syscall.SIGTERM)
+		}
+		cmd.WaitDelay = e.config.GracePeriod
+	}
 }
 
 func (e *DefaultExecutor) handleStderr(stderr io.ReadCloser) {

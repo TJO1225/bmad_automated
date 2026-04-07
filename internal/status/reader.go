@@ -120,7 +120,7 @@ func (r *Reader) BacklogStories() ([]Entry, error) {
 		return nil, err
 	}
 
-	var result []Entry
+	result := []Entry{}
 	for _, e := range entries {
 		if e.Type == EntryTypeStory && e.Status == StatusBacklog {
 			result = append(result, e)
@@ -144,7 +144,7 @@ func (r *Reader) StoriesForEpic(n int) ([]Entry, error) {
 		return nil, err
 	}
 
-	var result []Entry
+	result := []Entry{}
 	for _, e := range entries {
 		if e.Type == EntryTypeStory && e.EpicNum == n {
 			result = append(result, e)
@@ -166,7 +166,7 @@ func (r *Reader) StoriesByStatus(status string) ([]Entry, error) {
 		return nil, err
 	}
 
-	var result []Entry
+	result := []Entry{}
 	for _, e := range entries {
 		if e.Type == EntryTypeStory && string(e.Status) == status {
 			result = append(result, e)
@@ -236,7 +236,11 @@ func (r *Reader) readStoryLocation() (string, error) {
 
 	for i := 0; i < len(root.Content); i += 2 {
 		if root.Content[i].Value == "story_location" {
-			return root.Content[i+1].Value, nil
+			node := root.Content[i+1]
+			if node.Kind != yaml.ScalarNode || strings.TrimSpace(node.Value) == "" {
+				return "", fmt.Errorf("story_location field is empty in sprint status")
+			}
+			return node.Value, nil
 		}
 	}
 
