@@ -1,6 +1,6 @@
 # Story 1.3: Sprint Status Queries and Path Resolution
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -266,6 +266,13 @@ One test fix: `TestResolveStoryLocation_EmptyProjectDir` expected `_bmad-output/
 ### Change Log
 
 - 2026-04-06: Implemented story 1-3 — added StoriesByStatus generic filter, ResolveStoryLocation path resolver, comprehensive tests
+
+### Review Findings
+
+- [x] [Review][Decision→Patch] Empty/non-scalar `story_location` value resolves to `"."` without error — added scalar kind check and empty-value validation to `readStoryLocation()` [internal/status/reader.go:237-240] — fixed
+- [x] [Review][Patch] Filter methods return nil instead of empty slice when no entries match — changed `var result []Entry` to `result := []Entry{}` in `BacklogStories`, `StoriesForEpic`, `StoriesByStatus`; added `assert.NotNil` to tests [internal/status/reader.go:123,148,169] — fixed
+- [x] [Review][Defer] Non-scalar development_status values silently produce empty Status [internal/status/reader.go:100] — deferred, pre-existing Read() behavior from story 1.2
+- [x] [Review][Defer] Unclassified keys default to EntryTypeStory with zero fields [internal/status/reader.go:259-261] — deferred, pre-existing design decision from story 1.2
 
 ### File List
 
