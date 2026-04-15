@@ -155,6 +155,8 @@ story creation, implementation, and code review.`,
 	rootCmd.AddCommand(newRunCommand(app))
 	rootCmd.AddCommand(newEpicCommand(app))
 	rootCmd.AddCommand(newQueueCommand(app))
+	rootCmd.AddCommand(newDispatchCommand(app))
+	rootCmd.AddCommand(newCleanupCommand(app))
 
 	return rootCmd
 }

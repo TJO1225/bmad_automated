@@ -122,6 +122,24 @@ func (p *Pipeline) StepCreate(ctx context.Context, key string) (StepResult, erro
 		return StepResult{}, fmt.Errorf("create story %s: pipeline has no status reader", key)
 	}
 
+	// Resume skip: if the story is already past backlog, create-story has
+	// already run in a previous session. Return success without invoking
+	// Claude so the pipeline can advance to dev-story / code-review.
+	preReader := status.NewReader(p.projectDir)
+	preEntry, err := preReader.StoryByKey(key)
+	if err == nil && preEntry.Status != status.StatusBacklog {
+		msg := fmt.Sprintf("create-story already complete (status: %s)", preEntry.Status)
+		if p.printer != nil {
+			p.printer.Text(msg)
+		}
+		return StepResult{
+			Name:     stepNameCreate,
+			Success:  true,
+			Reason:   msg,
+			Duration: time.Since(start),
+		}, nil
+	}
+
 	prompt, err := p.cfg.GetPrompt("create-story", key)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("create story %s: %w", key, err)

@@ -54,25 +54,53 @@ func (p *Pipeline) StepCommitBranch(ctx context.Context, key string) (StepResult
 		return StepResult{}, fmt.Errorf("commit-branch %s: pipeline has no status reader", key)
 	}
 
-	// Verify we're on the default branch before branching off.
+	// Determine the current branch. Three cases are valid:
+	//   1. on default branch (main/master) → create story/<key>
+	//   2. already on story/<key> (dispatcher/worktree case) → no-op
+	//   3. detached HEAD → create story/<key> on this commit
+	// Anything else is a misconfigured working tree.
 	defaultBranch, err := git.DefaultBranch(ctx, p.projectDir)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("commit-branch %s: resolve default branch: %w", key, err)
 	}
-	current, err := git.CurrentBranch(ctx, p.projectDir)
+	current, err := git.CurrentBranchName(ctx, p.projectDir)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("commit-branch %s: %w", key, err)
 	}
-	if current != defaultBranch {
+	branchName := storyBranchPrefix + key
+
+	switch current {
+	case branchName:
+		// Already on the story branch — nothing to create. Common when the
+		// dispatcher pre-created the worktree on story/<key>.
+	case defaultBranch, "":
+		// On default branch, or detached HEAD. Create the story branch.
+		exists, err := git.BranchExists(ctx, p.projectDir, branchName)
+		if err != nil {
+			return StepResult{}, fmt.Errorf("commit-branch %s: check branch exists: %w", key, err)
+		}
+		if exists {
+			return StepResult{
+				Name:     stepNameCommitBranch,
+				Success:  false,
+				Reason:   fmt.Sprintf("commit-branch %s: branch %q already exists — delete it or resume manually", key, branchName),
+				Duration: time.Since(start),
+			}, nil
+		}
+		if err := git.CreateBranch(ctx, p.projectDir, branchName); err != nil {
+			return StepResult{}, fmt.Errorf("commit-branch %s: create branch: %w", key, err)
+		}
+	default:
 		return StepResult{
 			Name:     stepNameCommitBranch,
 			Success:  false,
-			Reason:   fmt.Sprintf("commit-branch %s: expected branch %q, found %q — commit-branch must start from the default branch", key, defaultBranch, current),
+			Reason:   fmt.Sprintf("commit-branch %s: expected branch %q or %q, found %q — commit-branch must start from the default branch or an existing story branch", key, defaultBranch, branchName, current),
 			Duration: time.Since(start),
 		}, nil
 	}
 
-	// Load story title + ACs for the commit message.
+	// Load story title + ACs for the commit message (after branch setup so
+	// failures here don't leave an empty orphan branch).
 	title, acs, err := readStoryMeta(p, key)
 	if err != nil {
 		return StepResult{
@@ -81,24 +109,6 @@ func (p *Pipeline) StepCommitBranch(ctx context.Context, key string) (StepResult
 			Reason:   fmt.Sprintf("commit-branch %s: %v", key, err),
 			Duration: time.Since(start),
 		}, nil
-	}
-
-	branchName := storyBranchPrefix + key
-	exists, err := git.BranchExists(ctx, p.projectDir, branchName)
-	if err != nil {
-		return StepResult{}, fmt.Errorf("commit-branch %s: check branch exists: %w", key, err)
-	}
-	if exists {
-		return StepResult{
-			Name:     stepNameCommitBranch,
-			Success:  false,
-			Reason:   fmt.Sprintf("commit-branch %s: branch %q already exists — delete it or resume manually", key, branchName),
-			Duration: time.Since(start),
-		}, nil
-	}
-
-	if err := git.CreateBranch(ctx, p.projectDir, branchName); err != nil {
-		return StepResult{}, fmt.Errorf("commit-branch %s: create branch: %w", key, err)
 	}
 
 	if err := git.AddAll(ctx, p.projectDir); err != nil {
@@ -124,6 +134,26 @@ func (p *Pipeline) StepCommitBranch(ctx context.Context, key string) (StepResult
 // prUrlRegex extracts the final line of gh pr create output that looks like
 // a GitHub PR URL. gh emits the URL as the last line on success.
 var prUrlRegex = regexp.MustCompile(`https?://\S+/pull/\d+`)
+
+// existingPRForBranch returns (url, true) if `gh pr view <branch>` finds a
+// PR for the branch, otherwise ("", false). Any error (no PR, gh not auth'd,
+// no remote) is treated as "no existing PR" so the normal push+create path
+// runs and surfaces the real problem.
+func existingPRForBranch(ctx context.Context, projectDir, branch string) (string, bool) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "view", branch, "--json", "url", "-q", ".url")
+	cmd.Dir = projectDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", false
+	}
+	url := strings.TrimSpace(stdout.String())
+	if url == "" {
+		return "", false
+	}
+	return url, true
+}
 
 // StepOpenPR pushes the current story branch to origin and opens a pull
 // request via `gh pr create`.
@@ -163,6 +193,21 @@ func (p *Pipeline) StepOpenPR(ctx context.Context, key string) (StepResult, erro
 			Name:     stepNameOpenPR,
 			Success:  false,
 			Reason:   fmt.Sprintf("open-pr %s: expected branch %q, found %q", key, branchName, current),
+			Duration: time.Since(start),
+		}, nil
+	}
+
+	// Resume: if a PR for this branch already exists (prior run succeeded at
+	// push + gh pr create), record its URL and skip the second attempt.
+	if url, exists := existingPRForBranch(ctx, p.projectDir, branchName); exists {
+		if p.printer != nil {
+			p.printer.Text("open-pr: existing PR " + url)
+		}
+		return StepResult{
+			Name:     stepNameOpenPR,
+			Success:  true,
+			PRURL:    url,
+			Reason:   "PR already exists",
 			Duration: time.Since(start),
 		}, nil
 	}

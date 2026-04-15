@@ -43,17 +43,34 @@ func (p *Pipeline) StepDevStory(ctx context.Context, key string) (StepResult, er
 		return StepResult{}, fmt.Errorf("dev story %s: pipeline has no status reader", key)
 	}
 
-	// Pre-condition: status must be ready-for-dev or in-progress.
+	// Pre-condition + resume logic: reconcile with current sprint status.
+	//   - ready-for-dev, in-progress → run (normal path / BMAD resume within skill)
+	//   - review, done               → skip success (prior run already completed dev)
+	//   - backlog                    → fail (create-story didn't run)
 	preReader := status.NewReader(p.projectDir)
 	preEntry, err := preReader.StoryByKey(key)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("dev story %s: %w", key, err)
 	}
-	if preEntry.Status != status.StatusReadyForDev && preEntry.Status != status.StatusInProgress {
+	switch preEntry.Status {
+	case status.StatusReadyForDev, status.StatusInProgress:
+		// fall through to invoke Claude
+	case status.StatusReview, status.StatusDone:
+		msg := fmt.Sprintf("dev-story already complete (status: %s)", preEntry.Status)
+		if p.printer != nil {
+			p.printer.Text(msg)
+		}
+		return StepResult{
+			Name:     stepNameDevStory,
+			Success:  true,
+			Reason:   msg,
+			Duration: time.Since(start),
+		}, nil
+	default:
 		return StepResult{
 			Name:     stepNameDevStory,
 			Success:  false,
-			Reason:   fmt.Sprintf("dev story %s: status is %q, expected ready-for-dev or in-progress", key, preEntry.Status),
+			Reason:   fmt.Sprintf("dev story %s: status is %q, expected ready-for-dev or in-progress (run create-story first)", key, preEntry.Status),
 			Duration: time.Since(start),
 		}, nil
 	}
@@ -149,7 +166,21 @@ func (p *Pipeline) StepCodeReview(ctx context.Context, key string) (StepResult, 
 	if err != nil {
 		return StepResult{}, fmt.Errorf("code-review %s: %w", key, err)
 	}
-	if preEntry.Status != status.StatusReview {
+	switch preEntry.Status {
+	case status.StatusReview:
+		// fall through to invoke Claude
+	case status.StatusDone:
+		msg := "code-review already complete (status: done)"
+		if p.printer != nil {
+			p.printer.Text(msg)
+		}
+		return StepResult{
+			Name:     stepNameCodeReview,
+			Success:  true,
+			Reason:   msg,
+			Duration: time.Since(start),
+		}, nil
+	default:
 		return StepResult{
 			Name:     stepNameCodeReview,
 			Success:  false,

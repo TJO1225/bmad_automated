@@ -1,544 +1,214 @@
 # CLI Reference
 
-Complete command-line interface reference for `bmad-automate`.
+Complete command and flag reference for `story-factory`.
 
 ## Synopsis
 
 ```
-bmad-automate [command] [arguments] [flags]
+story-factory [command] [arguments] [flags]
 ```
 
-## Description
+## Global flags
 
-BMAD Automation CLI orchestrates Claude AI to run development workflows including story creation, implementation, code review, and git operations.
+Available on every subcommand.
 
-## Global Behavior
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--mode` | string | `bmad` | Pipeline mode: `bmad` or `beads` |
+| `--project-dir` | string | current working directory | Path to BMAD project root |
+| `--dry-run` | bool | `false` | Show planned operations without executing subprocesses |
+| `--verbose` | bool | `false` | Stream Claude subprocess output in real time |
+| `-h`, `--help` | — | — | Help for any command |
 
-All commands:
+## Exit codes
 
-- Load configuration from `config/workflows.yaml` (or `BMAD_CONFIG_PATH`)
-- Execute Claude CLI with `--dangerously-skip-permissions` and `--output-format stream-json`
-- Display styled terminal output with progress indicators
-- Return appropriate exit codes (0 for success, non-zero for failure)
-
----
+| Code | Meaning |
+|------|---------|
+| 0 | Success, or no work needed |
+| 1 | At least one story failed during processing |
+| 2 | Precondition check failed (missing BMAD skill, bd/gh CLI, dirty tree, etc.) |
 
 ## Commands
 
-### create-story
+### `create-story <story-key>`
 
-Create a story definition from a story key.
-
-**Usage:**
+Invoke `/bmad-create-story <key>` once. Does not continue into dev/review.
 
 ```bash
-bmad-automate create-story <story-key>
+story-factory create-story 1-2-database-schema
 ```
 
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| story-key | Yes | The story identifier (e.g., `PROJ-123`) |
+Succeeds when:
+- The story file exists at `_bmad-output/implementation-artifacts/<key>.md`
+- Sprint status has advanced from `backlog`
 
-**Example:**
+Fails (exit 1) on Claude subprocess error or post-condition miss.
+
+### `run <story-key>`
+
+Run the full mode-dependent pipeline for one story.
 
 ```bash
-bmad-automate create-story PROJ-123
+story-factory run 1-2-database-schema               # bmad mode
+story-factory run 1-2-database-schema --mode=beads  # beads mode
 ```
 
-**Behavior:**
+**Resume behavior**: each step checks sprint status first and skips if the
+story has already progressed past it.
 
-1. Loads `create-story` workflow prompt from configuration
-2. Expands `{{.StoryKey}}` template with provided story key
-3. Executes Claude with the expanded prompt
-4. Displays streaming output
+| Starting status | Steps that run |
+|---|---|
+| `backlog` | all |
+| `ready-for-dev` | dev-story, code-review, commit-branch, open-pr |
+| `in-progress` | dev-story (resumes), code-review, commit-branch, open-pr |
+| `review` | code-review, commit-branch, open-pr |
+| `done` | none (whole pipeline short-circuits at top level) |
 
----
+Beads mode: same pattern but only `create-story` and `sync-to-beads`.
 
-### dev-story
+### `epic <epic-number>`
 
-Implement a story by running the development workflow.
-
-**Usage:**
+Sequential run for all backlog stories in one epic.
 
 ```bash
-bmad-automate dev-story <story-key>
+story-factory epic 1
 ```
 
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| story-key | Yes | The story identifier |
+- Lists stories keyed `<epic-number>-*-*`, filters to backlog-only, sorts
+  by story number.
+- Runs each through `run` to completion before advancing.
+- Stories not in backlog are skipped.
+- Single-story failure counts as batch failure but does not stop the batch.
 
-**Example:**
+### `queue`
+
+Same as `epic` but across all epics, ordered by epic then story.
 
 ```bash
-bmad-automate dev-story PROJ-123
+story-factory queue
 ```
 
-**Behavior:**
+### `dispatch [story-keys...] [--parallel N]`
 
-1. Loads `dev-story` workflow prompt
-2. Executes Claude to implement the story
-3. Claude runs tests after each implementation step
-
----
-
-### code-review
-
-Run code review on a story's changes.
-
-**Usage:**
+Parallel execution across tmux panes with per-story git worktrees.
 
 ```bash
-bmad-automate code-review <story-key>
+# all backlog stories, 4 in parallel
+story-factory dispatch --parallel 4
+
+# specific keys
+story-factory dispatch 1-2 1-3 2-1 --parallel 3
 ```
 
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| story-key | Yes | The story identifier |
+Flags:
 
-**Example:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-p`, `--parallel` | 4 | Max concurrent stories |
+
+Behavior:
+
+- Requires `$TMUX` to be set (must be invoked from inside tmux)
+- Creates `ceil(parallel / 4)` new tmux windows named `sf-batch-<n>`,
+  each with a 2×2 tiled pane layout (fewer panes if parallel % 4 ≠ 0)
+- For each story: `git worktree add -b story/<key> .story-factory/worktrees/<key> <base>`,
+  then `tmux send-keys` to run `story-factory run <key> --mode=bmad
+  --project-dir <wt>`; watches the pane for a nonce-tagged sentinel to
+  detect completion
+- **Resume**: if `.story-factory/worktrees/<key>` already exists, reuse it
+  instead of creating a new worktree
+- Panes are reused — when a story finishes, the next queued story runs
+  in the same pane
+
+Exit codes inherit from the aggregated batch result.
+
+### `cleanup [--force]`
+
+Remove worktrees whose `story/<key>` branch has been merged into the
+default branch.
 
 ```bash
-bmad-automate code-review PROJ-123
+story-factory cleanup
+story-factory cleanup --force   # even if not merged
 ```
 
-**Behavior:**
+Flags:
 
-1. Loads `code-review` workflow prompt
-2. Executes Claude to review code changes
-3. Automatically applies fixes when issues are found
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | off | Remove worktrees regardless of merge status (also uses `git branch -D`) |
 
----
+Only touches worktrees under `.story-factory/worktrees/` on `story/*`
+branches — worktrees you created by hand are ignored.
 
-### git-commit
+## Mode reference
 
-Commit and push changes for a story.
+### `bmad` mode
 
-**Usage:**
+Default. Five steps per story:
 
-```bash
-bmad-automate git-commit <story-key>
-```
+1. `create-story` — `/bmad-create-story <key>` via Claude
+2. `dev-story` — `/bmad-dev-story <key>` via Claude
+3. `code-review` — `/bmad-code-review <key>` via Claude
+4. `commit-branch` — native git: create `story/<key>`, stage all, commit
+5. `open-pr` — native `git push -u origin` + `gh pr create`
 
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| story-key | Yes | The story identifier |
+Preconditions: sprint-status.yaml + all three BMAD skill dirs + `gh` CLI +
+clean git tree.
 
-**Example:**
+### `beads` mode
 
-```bash
-bmad-automate git-commit PROJ-123
-```
+Two steps per story:
 
-**Behavior:**
+1. `create-story` — `/bmad-create-story <key>` via Claude
+2. `sync-to-beads` — `bd create` with the story title/ACs, appends
+   `<!-- bead:<id> -->` tracking comment to the story file
 
-1. Loads `git-commit` workflow prompt
-2. Executes Claude to create a commit with conventional commit format
-3. Pushes to the current branch
+Preconditions: sprint-status.yaml + `bmad-create-story` skill + `bd` CLI.
+No gh, no clean-tree requirement.
 
----
+## Configuration
 
-### run
-
-Execute the full lifecycle for a story from its current status to done.
-
-**Usage:**
-
-```bash
-bmad-automate run [--dry-run] <story-key>
-```
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| story-key | Yes | The story identifier |
-
-**Flags:**
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Preview workflow sequence without execution |
-
-**Example:**
-
-```bash
-# Run full lifecycle
-bmad-automate run PROJ-123
-
-# Preview what would run
-bmad-automate run --dry-run PROJ-123
-```
-
-**Lifecycle Routing:**
-
-The `run` command executes all remaining workflows to completion:
-
-| Story Status    | Remaining Lifecycle                                            |
-| --------------- | -------------------------------------------------------------- |
-| `backlog`       | create-story -> dev-story -> code-review -> git-commit -> done |
-| `ready-for-dev` | dev-story -> code-review -> git-commit -> done                 |
-| `in-progress`   | dev-story -> code-review -> git-commit -> done                 |
-| `review`        | code-review -> git-commit -> done                              |
-| `done`          | No action (story already complete)                             |
-
-**Behavior:**
-
-1. Reads story status from `_bmad-output/implementation-artifacts/sprint-status.yaml`
-2. Determines remaining lifecycle steps based on status
-3. Executes each workflow in sequence
-4. Auto-updates status in `sprint-status.yaml` after each successful step
-5. Stops at `done` or on first failure
-
-**Dry Run Output:**
-
-```
-Dry run for story PROJ-123:
-  1. create-story -> ready-for-dev
-  2. dev-story -> review
-  3. code-review -> done
-  4. git-commit -> done
-```
-
----
-
-### queue
-
-Run full lifecycle for multiple stories in batch.
-
-**Usage:**
-
-```bash
-bmad-automate queue [--dry-run] <story-key> [story-key...]
-```
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| story-key | Yes | One or more story identifiers |
-
-**Flags:**
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Preview workflow sequence without execution |
-
-**Example:**
-
-```bash
-# Run full lifecycle for each story
-bmad-automate queue PROJ-123 PROJ-124 PROJ-125
-
-# Preview what would run
-bmad-automate queue --dry-run PROJ-123 PROJ-124 PROJ-125
-```
-
-**Behavior:**
-
-1. Processes each story through its **full lifecycle** to completion
-2. Auto-updates status after each successful workflow step
-3. Skips stories with status `done`
-4. Stops on first failure
-5. Displays summary with timing for each story
-
-**Output:**
-
-```
-Queue: 3 stories [PROJ-123, PROJ-124, PROJ-125]
-
-[1/3] PROJ-123
-  ... workflow output ...
-
-[2/3] PROJ-124
-  ... workflow output ...
-
-Summary:
-  PROJ-123  ✓  1m 23s
-  PROJ-124  ✓  2m 45s
-  PROJ-125  ○  skipped (done)
-```
-
-**Dry Run Output:**
-
-```
-Dry run for 3 stories:
-
-Story PROJ-123:
-  1. dev-story -> review
-  2. code-review -> done
-  3. git-commit -> done
-
-Story PROJ-124:
-  (already complete)
-
-Story PROJ-125:
-  1. create-story -> ready-for-dev
-  2. dev-story -> review
-  3. code-review -> done
-  4. git-commit -> done
-
-Total: 7 workflows across 2 stories (1 already complete)
-```
-
----
-
-### epic
-
-Run full lifecycle for all stories in an epic.
-
-**Usage:**
-
-```bash
-bmad-automate epic [--dry-run] <epic-id>
-```
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| epic-id | Yes | The epic identifier |
-
-**Flags:**
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Preview workflow sequence without execution |
-
-**Example:**
-
-```bash
-# Run full lifecycle for all stories in epic
-bmad-automate epic 05
-
-# Preview what would run
-bmad-automate epic --dry-run 05
-```
-
-**Story Discovery:**
-
-Stories are discovered from `sprint-status.yaml` using the pattern:
-
-```
-{epic-id}-{story-number}-*
-```
-
-For epic `05`, this matches:
-
-- `05-01-implement-auth`
-- `05-02-add-dashboard`
-- `05-03-fix-navigation`
-
-Stories are sorted by story number and processed in order.
-
-**Behavior:**
-
-1. Finds all stories matching the epic pattern
-2. Sorts by story number
-3. Runs each story through its **full lifecycle** to completion
-4. Auto-updates status after each successful workflow step
-5. Stops on first failure
-
----
-
-### raw
-
-Execute an arbitrary prompt with Claude.
-
-**Usage:**
-
-```bash
-bmad-automate raw <prompt>
-```
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| prompt | Yes | The prompt text (can be multiple words) |
-
-**Example:**
-
-```bash
-bmad-automate raw "List all Go files in the project"
-bmad-automate raw Explain the architecture of this codebase
-```
-
-**Behavior:**
-
-1. Joins all arguments into a single prompt
-2. Executes Claude directly with the prompt
-3. Does not use any workflow templates
-
----
-
-## Exit Codes
-
-| Code | Meaning                                              |
-| ---- | ---------------------------------------------------- |
-| 0    | Success                                              |
-| 1    | General error (config load failure, unknown command) |
-| N    | Claude exit code (passed through from Claude CLI)    |
-
----
-
-## Environment Variables
-
-| Variable           | Description                | Default                   |
-| ------------------ | -------------------------- | ------------------------- |
-| `BMAD_CONFIG_PATH` | Path to configuration file | `./config/workflows.yaml` |
-| `BMAD_CLAUDE_PATH` | Path to Claude binary      | `claude` (from PATH)      |
-
----
-
-## Configuration File
-
-The default configuration file is `config/workflows.yaml`:
+Built-in defaults (see `internal/config/types.go`) are used if no config
+file is present. Override via `config/workflows.yaml`:
 
 ```yaml
 workflows:
   create-story:
-    prompt_template: "Create story: {{.StoryKey}}"
-
+    prompt_template: "/bmad-create-story - Create story: {{.StoryKey}}. Do not ask questions."
   dev-story:
-    prompt_template: "Work on story: {{.StoryKey}}"
-
+    prompt_template: "/bmad-dev-story - Implement story: {{.StoryKey}}. Do not ask questions."
   code-review:
-    prompt_template: "Review story: {{.StoryKey}}"
+    prompt_template: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree."
 
-  git-commit:
-    prompt_template: "Commit changes for {{.StoryKey}}"
-
-full_cycle:
-  steps:
-    - create-story
-    - dev-story
-    - code-review
-    - git-commit
+modes:
+  bmad:
+    steps: [create-story, dev-story, code-review, commit-branch, open-pr]
+  beads:
+    steps: [create-story, sync-to-beads]
 
 claude:
   output_format: stream-json
   binary_path: claude
 
 output:
-  truncate_lines: 20 # Max lines to show for tool output
-  truncate_length: 60 # Max chars for command header
+  truncate_lines: 20
+  truncate_length: 60
 ```
 
-### Template Variables
+Environment variables (Viper prefix `BMAD_`):
 
-| Variable        | Description                         |
-| --------------- | ----------------------------------- |
-| `{{.StoryKey}}` | The story key passed to the command |
+| Variable | Description |
+|----------|-------------|
+| `BMAD_CONFIG_PATH` | Explicit path to a config YAML |
+| `BMAD_CLAUDE_PATH` | Override `claude` binary path |
 
----
+## File locations
 
-## Sprint Status File
-
-The `run`, `queue`, and `epic` commands read story status from:
-
-```
-_bmad-output/implementation-artifacts/sprint-status.yaml
-```
-
-**Format:**
-
-```yaml
-development_status:
-  PROJ-123: ready-for-dev
-  PROJ-124: in-progress
-  PROJ-125: done
-```
-
-**Valid Status Values:**
-
-- `backlog` - Story not yet started
-- `ready-for-dev` - Story ready for implementation
-- `in-progress` - Story being implemented
-- `review` - Story in code review
-- `done` - Story complete
-
----
-
-## State File
-
-The lifecycle executor persists execution state for error recovery.
-
-**Location:**
-
-```
-.bmad-state.json   # In working directory (hidden file)
-```
-
-**Format:**
-
-```json
-{
-	"story_key": "PROJ-123",
-	"step_index": 2,
-	"total_steps": 4,
-	"start_status": "backlog"
-}
-```
-
-**Fields:**
-| Field | Description |
-|-------|-------------|
-| `story_key` | The story being processed |
-| `step_index` | 0-based index of the current/failed step |
-| `total_steps` | Total steps in the lifecycle sequence |
-| `start_status` | The story's status when execution began |
-
-**Lifecycle:**
-
-1. **Saved on failure** - State is written when a workflow step fails
-2. **Used on resume** - On re-run, execution continues from current status
-3. **Cleared on success** - State file is deleted after successful lifecycle completion
-
-**Notes:**
-
-- The state file is optional - deleting it forces a fresh start from current status
-- State is written atomically (temp file + rename) to prevent corruption
-- Each story has its own state; queue/epic commands process stories sequentially
-
----
-
-## Examples
-
-### Basic Workflow
-
-```bash
-# Step-by-step workflow
-bmad-automate create-story PROJ-123
-bmad-automate dev-story PROJ-123
-bmad-automate code-review PROJ-123
-bmad-automate git-commit PROJ-123
-```
-
-### Status-Based Automation
-
-```bash
-# Let the tool determine the right workflow
-bmad-automate run PROJ-123
-
-# Process multiple stories
-bmad-automate queue PROJ-123 PROJ-124 PROJ-125
-
-# Process an entire epic
-bmad-automate epic 05
-```
-
-### Ad-Hoc Tasks
-
-```bash
-# Run arbitrary prompts
-bmad-automate raw "What is the test coverage?"
-bmad-automate raw "Find all TODO comments"
-```
-
-### Custom Configuration
-
-```bash
-# Use custom config file
-BMAD_CONFIG_PATH=/path/to/config.yaml bmad-automate run PROJ-123
-
-# Use custom Claude binary
-BMAD_CLAUDE_PATH=/usr/local/bin/claude bmad-automate dev-story PROJ-123
-```
+| Path | Purpose |
+|------|---------|
+| `_bmad-output/implementation-artifacts/sprint-status.yaml` | Source of truth for story state |
+| `_bmad-output/implementation-artifacts/<key>.md` | Per-story spec file (written by `create-story`) |
+| `.claude/skills/bmad-{create-story,dev-story,code-review}/` | BMAD v6 skill directories |
+| `.story-factory/worktrees/<key>/` | Dispatcher-managed worktree per story |
+| `config/workflows.yaml` | Optional config override |

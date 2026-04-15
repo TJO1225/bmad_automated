@@ -108,7 +108,7 @@ func TestStepCommitBranch_WrongBranch(t *testing.T) {
 	writeStoryFile(t, dir, key, "review", "Database Schema")
 	commitFixturesGit(t, dir)
 
-	// Switch to a non-default branch to simulate a misconfigured worktree.
+	// Switch to an unrelated branch to simulate a misconfigured tree.
 	require.NoError(t, exec.Command("git", "-C", dir, "checkout", "-b", "other").Run())
 
 	p := NewPipeline(nil, config.DefaultConfig(), dir,
@@ -119,6 +119,36 @@ func TestStepCommitBranch_WrongBranch(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, result.Reason, "must start from the default branch")
+}
+
+func TestStepCommitBranch_AlreadyOnStoryBranch(t *testing.T) {
+	// Worktree case: dispatcher pre-created story/<key>. commit-branch
+	// should skip branch creation and just commit.
+	dir := newGitTestRepo(t)
+	key := "1-2-database-schema"
+	writeStoryFile(t, dir, key, "review", "Database Schema")
+	commitFixturesGit(t, dir)
+
+	branchName := "story/" + key
+	require.NoError(t, exec.Command("git", "-C", dir, "checkout", "-b", branchName).Run())
+
+	// Simulate dev-story work.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package x\n"), 0644))
+
+	p := NewPipeline(nil, config.DefaultConfig(), dir,
+		WithStatus(status.NewReader(dir)),
+	)
+
+	result, err := p.StepCommitBranch(context.Background(), key)
+	require.NoError(t, err)
+	assert.True(t, result.Success, "should succeed when already on story/<key>: %s", result.Reason)
+
+	// Still on the same branch — the step must not try to re-create it.
+	branch := runGitForTest(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	assert.Equal(t, branchName, branch)
+
+	log := runGitForTest(t, dir, "log", "-1", "--format=%s")
+	assert.Contains(t, log, "feat("+key+"): Database Schema")
 }
 
 func TestStepCommitBranch_BranchAlreadyExists(t *testing.T) {

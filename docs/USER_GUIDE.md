@@ -1,562 +1,231 @@
 # User Guide
 
-A practical guide to using `bmad-automate` for automating development workflows.
+Practical recipes for using `story-factory` on a BMAD v6 project.
 
-## Overview
+For a command-by-command reference, see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 
-`bmad-automate` is a CLI tool that orchestrates Claude AI to automate repetitive development tasks. It handles:
-
-- Creating story definitions from story keys
-- Implementing features based on story requirements
-- Running code reviews
-- Committing and pushing changes
-- Processing multiple stories in batch
-- Managing entire epics
-
-## Quick Start
-
-### Prerequisites
-
-1. **Go 1.21+** installed
-2. **Claude CLI** installed and configured ([installation guide](https://github.com/anthropics/claude-code))
-3. **just** command runner (optional but recommended)
-
-### Installation
+## 1. First-time setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/bmad-automate.git
-cd bmad-automate
-
 # Build the binary
+git clone <repo> && cd bmad_automated
 just build
-# OR
-go build -o bmad-automate ./cmd/bmad-automate
 
-# (Optional) Install globally
-go install ./cmd/bmad-automate
+# Or install globally so it's on PATH
+go install ./cmd/story-factory
 ```
 
-### Verify Installation
+Verify:
 
 ```bash
-bmad-automate --help
+story-factory --help
 ```
 
-## Basic Usage
-
-### Working with Individual Stories
-
-#### 1. Create a Story
-
-Generate a story definition from a story key:
+Preflight any BMAD project you plan to use it against:
 
 ```bash
-bmad-automate create-story PROJ-123
+cd ~/your-project
+ls _bmad-output/implementation-artifacts/sprint-status.yaml
+ls .claude/skills/bmad-{create-story,dev-story,code-review}/
+which gh          # bmad mode needs this
+gh auth status    # must be authenticated for open-pr to work
 ```
 
-This runs Claude with a prompt to create the story definition based on your configured template.
+## 2. The two modes
 
-#### 2. Implement the Story
+story-factory supports two pipelines. Pick one per invocation with `--mode`.
 
-Run the development workflow:
+### bmad mode (default)
+
+Full loop from backlog to PR. Use for day-to-day development.
+
+```
+create-story → dev-story → code-review → commit-branch → open-pr
+```
+
+At the end you have a `story/<key>` branch pushed to origin and a PR
+awaiting review on GitHub.
+
+### beads mode
+
+Create the story and hand off to Gastown Beads. Use when your project
+tracks implementation separately in Beads.
+
+```
+create-story → sync-to-beads
+```
+
+Invoke with `--mode=beads`.
+
+## 3. Common workflows
+
+### Run one story end-to-end
 
 ```bash
-bmad-automate dev-story PROJ-123
+cd ~/your-project
+story-factory run 1-2-database-schema
 ```
 
-Claude will:
+Takes you from backlog to a PR against main. Watch it stream with `--verbose`.
 
-- Read the story requirements
-- Implement the feature
-- Run tests after each change
-
-#### 3. Review the Code
-
-Run code review on your changes:
+### Run a whole epic sequentially
 
 ```bash
-bmad-automate code-review PROJ-123
+story-factory epic 1
 ```
 
-Claude reviews the code and automatically fixes issues.
+Stories run one at a time in order. Total time ≈ sum of individual story
+times. Good for epics where stories build on each other.
 
-#### 4. Commit and Push
-
-Create a commit and push to remote:
+### Drain the backlog sequentially
 
 ```bash
-bmad-automate git-commit PROJ-123
+story-factory queue
 ```
 
-### Status-Based Automation
+All backlog stories across all epics, in order. Same sequential behavior
+as `epic`.
 
-Instead of manually running each step, let `bmad-automate` determine what to do:
+### Run many stories in parallel (tmux)
 
 ```bash
-bmad-automate run PROJ-123
+# from inside a tmux session
+cd ~/your-project
+story-factory dispatch --parallel 4
 ```
 
-The `run` command now executes the **complete lifecycle** from the story's current status all the way to `done`. It auto-updates the status after each successful step and stops at completion or on the first failure.
+Creates 4 panes (one window, 2×2 tiled) and runs 4 stories concurrently,
+each in its own git worktree under `.story-factory/worktrees/`. As each
+story finishes, its pane picks up the next story in the queue.
 
-| Story Status    | Remaining Lifecycle                                            |
-| --------------- | -------------------------------------------------------------- |
-| `backlog`       | create-story -> dev-story -> code-review -> git-commit -> done |
-| `ready-for-dev` | dev-story -> code-review -> git-commit -> done                 |
-| `in-progress`   | dev-story -> code-review -> git-commit -> done                 |
-| `review`        | code-review -> git-commit -> done                              |
-| `done`          | No action (story already complete)                             |
+Cap at whatever you can monitor — 4 is typical, 8 (two windows) if you
+have a large screen.
 
-### Full Lifecycle Execution
-
-The `run` command processes stories through their entire remaining lifecycle automatically:
+Specific keys only:
 
 ```bash
-bmad-automate run PROJ-123
+story-factory dispatch 1-2 1-3 1-5 --parallel 3
 ```
 
-**Example output:**
-
-```
-[1/4] create-story
-  ... workflow output ...
-
-[2/4] dev-story
-  ... workflow output ...
-
-[3/4] code-review
-  ... workflow output ...
-
-[4/4] git-commit
-  ... workflow output ...
-
-Story PROJ-123 completed successfully
-```
-
-**How it works:**
-
-1. Reads the story's current status from `sprint-status.yaml`
-2. Determines remaining lifecycle steps based on status
-3. Executes each workflow in sequence
-4. Updates status in `sprint-status.yaml` after each successful step
-5. Stops at `done` or on first failure
-
-### Dry Run Mode
-
-Preview what workflows will run without executing them:
+### Preview before executing
 
 ```bash
-bmad-automate run --dry-run PROJ-123
+story-factory run 1-2-database-schema --dry-run
+story-factory dispatch --parallel 4 --dry-run
 ```
 
-**Example output:**
+No Claude calls, no git ops. Dry-run confirms preconditions pass and
+shows the planned sequence.
 
-```
-Dry run for story PROJ-123:
-  1. create-story -> ready-for-dev
-  2. dev-story -> review
-  3. code-review -> done
-  4. git-commit -> done
-```
+### Clean up merged worktrees
 
-Dry run is available for all lifecycle commands:
+After PRs merge:
 
 ```bash
-bmad-automate run --dry-run PROJ-123           # Single story
-bmad-automate queue --dry-run PROJ-123 PROJ-124  # Multiple stories
-bmad-automate epic --dry-run 05                # All stories in epic
+story-factory cleanup
 ```
 
-### Error Recovery
+Removes any worktree under `.story-factory/worktrees/` whose
+`story/<key>` branch is now an ancestor of the default branch.
 
-When a workflow fails, the tool saves execution state so you can resume from the point of failure:
+## 4. Recovering from interruptions
 
-**State file:** `.bmad-state.json`
+story-factory is resume-safe. Typical recovery patterns:
 
-```json
-{
-	"story_key": "PROJ-123",
-	"step_index": 2,
-	"total_steps": 4,
-	"start_status": "backlog"
-}
-```
-
-**Resuming after failure:**
+### A single story crashed mid-run
 
 ```bash
-# Workflow fails at step 2 (dev-story)
-bmad-automate run PROJ-123
-# Error: workflow failed: dev-story returned exit code 1
+# Check current status:
+grep '1-2-database-schema' _bmad-output/implementation-artifacts/sprint-status.yaml
+# development_status:
+#   1-2-database-schema: in-progress         # dev-story was partway
 
-# Fix the issue, then re-run
-bmad-automate run PROJ-123
-# Continues from current status (no work is lost)
+# Just re-run it:
+story-factory run 1-2-database-schema
 ```
 
-The state file is automatically cleared on successful completion.
+- `create-story` → skipped (status past `backlog`)
+- `dev-story` → runs; BMAD's own skill resumes from its partial state
+- `code-review` → runs if dev-story finishes
+- `commit-branch` / `open-pr` → run
 
-### Batch Processing
-
-Process multiple stories at once:
+### Dispatch crashed partway through an epic
 
 ```bash
-bmad-automate queue PROJ-123 PROJ-124 PROJ-125
+# Some worktrees exist, others don't. Just re-run:
+story-factory dispatch --parallel 4
 ```
 
-The queue:
+For each story the dispatcher will:
 
-- Runs each story through its **full lifecycle** to completion
-- Auto-updates status after each successful workflow step
-- Skips completed stories
-- Stops on first failure
-- Shows a summary at the end
+- reuse an existing worktree at `.story-factory/worktrees/<key>` if present
+- create a new one otherwise
 
-Use `--dry-run` to preview the full execution plan:
+Inside each worktree, `story-factory run` applies the per-story resume
+logic above. Stories already at `done` are skipped entirely.
+
+### `gh pr create` failed after a successful commit
+
+Most common cause: you weren't logged in to `gh`. Fix and re-run:
 
 ```bash
-bmad-automate queue --dry-run PROJ-123 PROJ-124 PROJ-125
+gh auth login
+story-factory run 1-2-database-schema
 ```
 
-### Processing an Epic
+`open-pr` detects the pre-existing push and either re-pushes (no-op) and
+creates the PR, or — if a prior run already created one — finds the
+existing PR via `gh pr view` and records its URL.
 
-Run all stories in an epic through their full lifecycle:
+### code-review found issues (status flipped back to `in-progress`)
+
+story-factory stops with `needs-review` in the summary. Address the
+findings in the story file's review section, then re-run:
 
 ```bash
-bmad-automate epic 05
+# Story status is now in-progress, but dev-story resume will accept that.
+story-factory run 1-2-database-schema
 ```
 
-This finds all stories matching the pattern `05-{N}-*` (e.g., `05-01-auth`, `05-02-dashboard`), sorts them by story number, and runs each through its complete lifecycle to completion.
+If the review pass was pure polish and you want to force-complete,
+manually bump the status to `done` in `sprint-status.yaml` and skip to
+commit-branch / open-pr.
 
-Use `--dry-run` to preview:
+### Worktree got into a weird state
 
 ```bash
-bmad-automate epic --dry-run 05
+# Nuclear option — delete the worktree + branch and restart:
+git worktree remove .story-factory/worktrees/1-2-foo --force
+git branch -D story/1-2-foo
+story-factory run 1-2-foo
 ```
 
-### Ad-Hoc Prompts
+## 5. Tips
 
-Run any prompt directly:
+**Watch a dispatcher run**: the dispatcher's own output goes to the pane
+you invoked it from. The panes it spawns show each story's live output.
+Use Ctrl-b q to flash pane numbers so you can jump around.
 
-```bash
-bmad-automate raw "List all TODO comments in the codebase"
-bmad-automate raw "What tests are missing coverage?"
-```
+**Test on one story first** before dispatching a whole epic. The first
+run always uncovers some environmental surprise.
 
-## Configuration
+**Keep `sprint-status.yaml` under version control.** It's the source of
+truth for resume. If you lose it, story-factory has no way to know what
+ran.
 
-### Config File Location
+**Don't edit `sprint-status.yaml` by hand while a pipeline is running** —
+BMAD's skills write to it too, and simultaneous edits will race.
 
-By default, configuration is loaded from `config/workflows.yaml`.
+## 6. When not to use this
 
-Override with environment variable:
+- One-off experiments where BMAD's structure is overkill
+- Projects without BMAD v6 installed
+- Stories that don't map to a single PR (e.g., massive multi-week epics
+  that span many commits). Break those down first with `bmad-create-story`
+  manually.
 
-```bash
-export BMAD_CONFIG_PATH=/path/to/custom/config.yaml
-bmad-automate run PROJ-123
-```
+## Related docs
 
-### Customizing Workflows
-
-Edit `config/workflows.yaml` to customize workflow prompts:
-
-```yaml
-workflows:
-  create-story:
-    prompt_template: |
-      Create a detailed story definition for {{.StoryKey}}.
-      Include acceptance criteria and technical requirements.
-      Do not ask clarifying questions.
-
-  dev-story:
-    prompt_template: |
-      Implement story {{.StoryKey}}.
-      Follow existing code patterns.
-      Run tests after each change.
-      Do not ask questions - use best judgment.
-
-  code-review:
-    prompt_template: |
-      Review changes for story {{.StoryKey}}.
-      Check for:
-      - Code quality issues
-      - Missing tests
-      - Security vulnerabilities
-      Auto-fix all issues immediately.
-
-  git-commit:
-    prompt_template: |
-      Commit changes for {{.StoryKey}}.
-      Use conventional commit format.
-      Push to current branch.
-```
-
-### Template Variables
-
-| Variable        | Description                         |
-| --------------- | ----------------------------------- |
-| `{{.StoryKey}}` | The story key passed to the command |
-
-### Output Settings
-
-Control how much output is displayed:
-
-```yaml
-output:
-  truncate_lines: 20 # Max lines for tool output
-  truncate_length: 60 # Max chars for command headers
-```
-
-### Claude Settings
-
-Customize Claude execution:
-
-```yaml
-claude:
-  binary_path: claude # Path to Claude binary
-  output_format: stream-json # Output format (don't change)
-```
-
-Or use environment variables:
-
-```bash
-export BMAD_CLAUDE_PATH=/usr/local/bin/claude
-```
-
-## Sprint Status File
-
-### File Location
-
-The tool reads story status from:
-
-```
-_bmad-output/implementation-artifacts/sprint-status.yaml
-```
-
-### File Format
-
-```yaml
-development_status:
-  PROJ-123: ready-for-dev
-  PROJ-124: in-progress
-  PROJ-125: review
-  PROJ-126: done
-  05-01-auth: backlog
-  05-02-dashboard: ready-for-dev
-```
-
-### Valid Status Values
-
-| Status          | Meaning                                 |
-| --------------- | --------------------------------------- |
-| `backlog`       | Not started, needs story creation       |
-| `ready-for-dev` | Story created, ready for implementation |
-| `in-progress`   | Currently being implemented             |
-| `review`        | Implementation done, needs review       |
-| `done`          | Complete                                |
-
-## Workflow Patterns
-
-### Pattern 1: Sequential Development
-
-Run each step manually for full control:
-
-```bash
-bmad-automate create-story PROJ-123
-# Review the story definition
-bmad-automate dev-story PROJ-123
-# Test the implementation manually
-bmad-automate code-review PROJ-123
-# Verify fixes
-bmad-automate git-commit PROJ-123
-```
-
-### Pattern 2: Status-Driven
-
-Let the tool figure out what to do:
-
-```bash
-# Run whatever step is needed next
-bmad-automate run PROJ-123
-
-# Run again after updating status
-bmad-automate run PROJ-123
-```
-
-### Pattern 3: Batch Sprint
-
-Process an entire sprint's stories:
-
-```bash
-bmad-automate queue SPRINT-1 SPRINT-2 SPRINT-3 SPRINT-4 SPRINT-5
-```
-
-### Pattern 4: Epic Processing
-
-Process all stories in an epic:
-
-```bash
-bmad-automate epic 05
-```
-
-### Pattern 5: Investigation
-
-Use raw prompts for ad-hoc tasks:
-
-```bash
-# Understand the codebase
-bmad-automate raw "Explain the authentication flow"
-
-# Find issues
-bmad-automate raw "What tests have the most failures?"
-
-# Generate reports
-bmad-automate raw "Create a summary of recent changes"
-```
-
-## Understanding Output
-
-### Tool Invocations
-
-When Claude uses tools, you'll see formatted output:
-
-```
-┌─ Bash ─────────────────────────────────────────────────────────
-│  List project files
-│  $ ls -la
-└────────────────────────────────────────────────────────────────
-
-total 48
-drwxr-xr-x  12 user  staff   384 Jan  8 10:00 .
-drwxr-xr-x   5 user  staff   160 Jan  8 09:00 ..
-...
-```
-
-### Progress Indicators
-
-| Symbol | Meaning     |
-| ------ | ----------- |
-| ●      | In progress |
-| ✓      | Success     |
-| ✗      | Failure     |
-| ○      | Skipped     |
-
-### Queue Summary
-
-After processing multiple stories:
-
-```
-Summary:
-  PROJ-123  ✓  1m 23s
-  PROJ-124  ✓  2m 45s
-  PROJ-125  ○  skipped (done)
-  PROJ-126  ✗  failed at dev-story (45s)
-```
-
-## Error Handling
-
-### Exit Codes
-
-| Code | Meaning                             |
-| ---- | ----------------------------------- |
-| 0    | Success                             |
-| 1    | General error                       |
-| N    | Claude's exit code (passed through) |
-
-### Resume Capability
-
-When a lifecycle execution fails, the tool persists state to `.bmad-state.json`. This enables resume from the point of failure:
-
-1. **Failure occurs** - State is saved with current story and step index
-2. **Fix the issue** - Address whatever caused the failure
-3. **Re-run the command** - Execution continues from current status
-
-The state file is automatically deleted after successful lifecycle completion.
-
-### State File Location
-
-```
-.bmad-state.json   # In working directory (hidden file)
-```
-
-You can safely delete this file to force a fresh start from the story's current status.
-
-### Common Issues
-
-**Claude not found:**
-
-```
-Error: failed to start claude: exec: "claude": executable file not found in $PATH
-```
-
-Solution: Install Claude CLI or set `BMAD_CLAUDE_PATH`.
-
-**Config not found:**
-
-```
-Error: error loading config: open config/workflows.yaml: no such file or directory
-```
-
-Solution: Create the config file or set `BMAD_CONFIG_PATH`.
-
-**Story not in status file:**
-
-```
-Error: story PROJ-999 not found in sprint status
-```
-
-Solution: Add the story to `sprint-status.yaml`.
-
-**Unknown status:**
-
-```
-Error: unknown status value: invalid-status
-```
-
-Solution: Use a valid status: `backlog`, `ready-for-dev`, `in-progress`, `review`, or `done`.
-
-## Tips and Best Practices
-
-### 1. Start Small
-
-Begin with single story commands to understand the workflow:
-
-```bash
-bmad-automate create-story TEST-001
-```
-
-### 2. Review Output
-
-Always review Claude's output before moving to the next step. The streaming output shows exactly what Claude is doing.
-
-### 3. Use Descriptive Story Keys
-
-Story keys appear in commits and prompts. Use meaningful identifiers:
-
-- Good: `AUTH-001`, `FEAT-user-profile`, `BUG-login-fix`
-- Bad: `x`, `test`, `123`
-
-### 4. Customize Prompts for Your Project
-
-Edit the prompt templates to match your project's conventions, coding standards, and requirements.
-
-### 5. Keep Status File Updated
-
-The status file is the source of truth for automation. Keep it current as stories progress.
-
-### 6. Handle Failures Gracefully
-
-When a queue stops on failure:
-
-1. Review the error
-2. Fix the issue manually or adjust the story
-3. Update the status file
-4. Re-run the queue (completed stories will be skipped)
-
-### 7. Use Raw for Exploration
-
-Before starting a story, use raw prompts to understand the codebase:
-
-```bash
-bmad-automate raw "What files would I need to change to add user authentication?"
-```
+- [CLI_REFERENCE.md](CLI_REFERENCE.md) — every flag
+- [ARCHITECTURE.md](ARCHITECTURE.md) — internals
+- [BMAD v6 docs](https://docs.bmad-method.org/) — the skills story-factory drives
