@@ -68,21 +68,23 @@ Beads mode: same pattern but only `create-story` and `sync-to-beads`.
 
 ### `epic <epic-number>`
 
-Sequential run for all backlog stories in one epic.
+Sequential run for every **unfinished** story in one epic.
 
 ```bash
 story-factory epic 1
 ```
 
-- Lists stories keyed `<epic-number>-*-*`, filters to backlog-only, sorts
+- Lists stories keyed `<epic-number>-*-*`, filters to non-done only, sorts
   by story number.
-- Runs each through `run` to completion before advancing.
-- Stories not in backlog are skipped.
+- Runs each through `run` to completion before advancing. `run` applies
+  per-step resume logic, so stories already at `ready-for-dev`,
+  `in-progress`, or `review` pick up where they left off.
 - Single-story failure counts as batch failure but does not stop the batch.
 
 ### `queue`
 
-Same as `epic` but across all epics, ordered by epic then story.
+Same as `epic` but across all epics, ordered by epic then story. Processes
+every story whose status is not `done`.
 
 ```bash
 story-factory queue
@@ -93,10 +95,10 @@ story-factory queue
 Parallel execution across tmux panes with per-story git worktrees.
 
 ```bash
-# all backlog stories, 4 in parallel
+# all unfinished stories (anything not at done), 4 in parallel
 story-factory dispatch --parallel 4
 
-# specific keys
+# specific keys (bypasses the unfinished filter — any key is accepted)
 story-factory dispatch 1-2 1-3 2-1 --parallel 3
 ```
 

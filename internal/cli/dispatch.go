@@ -112,13 +112,15 @@ Must be run from inside a tmux session. Each story gets a fresh worktree at
 }
 
 // resolveDispatchKeys returns the list of story keys to dispatch. If args is
-// non-empty, those keys are used verbatim; otherwise the backlog queue is
-// pulled from sprint-status.yaml.
+// non-empty, those keys are used verbatim; otherwise every unfinished story
+// (anything not at "done") is pulled from sprint-status.yaml. Stories
+// already at ready-for-dev / in-progress / review are picked up and run
+// through the pipeline's per-step resume logic.
 func resolveDispatchKeys(reader *status.Reader, args []string) ([]string, error) {
 	if len(args) > 0 {
 		return args, nil
 	}
-	entries, err := reader.BacklogStories()
+	entries, err := reader.UnfinishedStories()
 	if err != nil {
 		return nil, err
 	}

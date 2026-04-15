@@ -142,9 +142,9 @@ development_status:
 	rootCmd := NewRootCommand(app)
 	rootCmd.SetArgs([]string{"epic", "1", "--project-dir", dir})
 	err := rootCmd.Execute()
-	require.NoError(t, err, "no backlog stories should exit with code 0")
+	require.NoError(t, err, "all-done epic should exit with code 0")
 
-	assert.Contains(t, buf.String(), "No backlog stories")
+	assert.Contains(t, buf.String(), "No unfinished stories")
 }
 
 func TestEpicCommand_DryRunPropagated(t *testing.T) {

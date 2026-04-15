@@ -337,6 +337,54 @@ func TestBacklogStories_Empty(t *testing.T) {
 	assert.NotNil(t, stories) // must be []Entry{}, not nil
 }
 
+// --- UnfinishedStories() tests ---
+
+func TestUnfinishedStories_ExcludesOnlyDone(t *testing.T) {
+	tmpDir := setupFixture(t, "sprint_status.yaml")
+	reader := NewReader(tmpDir)
+
+	stories, err := reader.UnfinishedStories()
+	require.NoError(t, err)
+
+	keys := make([]string, len(stories))
+	for i, s := range stories {
+		keys[i] = s.Key
+	}
+
+	// sprint_status.yaml contains:
+	//   1-1-define-schema: done         -> excluded
+	//   1-2-create-api: ready-for-dev   -> included
+	//   1-3-build-ui: backlog           -> included
+	//   2-1-setup-auth: backlog         -> included
+	//   2-2-add-roles: backlog          -> included
+	//   2-10-final-cleanup: backlog     -> included
+	//   3-1-monitoring: in-progress     -> included
+	expected := []string{
+		"1-2-create-api",
+		"1-3-build-ui",
+		"2-1-setup-auth",
+		"2-2-add-roles",
+		"2-10-final-cleanup",
+		"3-1-monitoring",
+	}
+	assert.Equal(t, expected, keys)
+
+	for _, s := range stories {
+		assert.Equal(t, EntryTypeStory, s.Type)
+		assert.NotEqual(t, StatusDone, s.Status, "done stories must be excluded")
+	}
+}
+
+func TestUnfinishedStories_Empty(t *testing.T) {
+	tmpDir := setupFixture(t, "sprint_empty.yaml")
+	reader := NewReader(tmpDir)
+
+	stories, err := reader.UnfinishedStories()
+	require.NoError(t, err)
+	assert.Empty(t, stories)
+	assert.NotNil(t, stories)
+}
+
 // --- StoriesForEpic() tests ---
 
 func TestStoriesForEpic_FiltersAndSorts(t *testing.T) {

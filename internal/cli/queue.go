@@ -21,7 +21,7 @@ import (
 func newQueueCommand(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "queue",
-		Short: "Process all backlog stories across all epics",
+		Short: "Process every unfinished story across all epics (anything not done)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Run preconditions (exit code 2 on failure)
@@ -34,9 +34,10 @@ func newQueueCommand(app *App) *cobra.Command {
 				return fmt.Errorf("failed to determine working directory: %w", err)
 			}
 
-			// Get backlog story list for display
+			// Get the unfinished story list for display. The pipeline's batch
+			// runner uses the same filter internally so the counts match.
 			reader := status.NewReader(projectDir)
-			stories, err := reader.BacklogStories()
+			stories, err := reader.UnfinishedStories()
 			if err != nil {
 				app.Printer.Text(fmt.Sprintf("Error reading sprint status: %s", err))
 				return NewExitError(1)
@@ -48,7 +49,7 @@ func newQueueCommand(app *App) *cobra.Command {
 			}
 
 			if len(stories) == 0 {
-				app.Printer.Text("No backlog stories in queue")
+				app.Printer.Text("No unfinished stories in queue")
 				return nil
 			}
 

@@ -74,8 +74,11 @@ Takes you from backlog to a PR against main. Watch it stream with `--verbose`.
 story-factory epic 1
 ```
 
-Stories run one at a time in order. Total time ≈ sum of individual story
-times. Good for epics where stories build on each other.
+Processes every story in the epic whose status is not `done` — including
+stories already at `ready-for-dev`, `in-progress`, or `review`. Each runs
+through `run`'s resume logic so finished steps are skipped. Total time ≈
+sum of individual story times. Good for epics where stories build on
+each other.
 
 ### Drain the backlog sequentially
 
@@ -83,8 +86,8 @@ times. Good for epics where stories build on each other.
 story-factory queue
 ```
 
-All backlog stories across all epics, in order. Same sequential behavior
-as `epic`.
+All unfinished stories across all epics, in order. Same sequential
+behavior as `epic`.
 
 ### Run many stories in parallel (tmux)
 

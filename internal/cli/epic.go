@@ -22,7 +22,7 @@ import (
 func newEpicCommand(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "epic <epic-number>",
-		Short: "Run the full pipeline for all backlog stories in an epic",
+		Short: "Run the full pipeline for every unfinished story in an epic",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			epicNum, err := strconv.Atoi(args[0])
@@ -40,7 +40,8 @@ func newEpicCommand(app *App) *cobra.Command {
 				return fmt.Errorf("failed to determine working directory: %w", err)
 			}
 
-			// Get backlog story list for display
+			// Collect unfinished stories for display. Includes backlog,
+			// ready-for-dev, in-progress, and review — anything still workable.
 			reader := status.NewReader(projectDir)
 			allStories, err := reader.StoriesForEpic(epicNum)
 			if err != nil {
@@ -50,13 +51,13 @@ func newEpicCommand(app *App) *cobra.Command {
 
 			var storyKeys []string
 			for _, s := range allStories {
-				if s.Status == status.StatusBacklog {
+				if s.Status != status.StatusDone {
 					storyKeys = append(storyKeys, s.Key)
 				}
 			}
 
 			if len(storyKeys) == 0 {
-				app.Printer.Text("No backlog stories for epic " + args[0])
+				app.Printer.Text("No unfinished stories for epic " + args[0])
 				return nil
 			}
 

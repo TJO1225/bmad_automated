@@ -137,6 +137,42 @@ func (r *Reader) BacklogStories() ([]Entry, error) {
 	return result, nil
 }
 
+// UnfinishedStories returns every story entry whose status is not "done",
+// sorted by epic then story number. This is the set of work the pipeline
+// can still do: backlog, ready-for-dev, in-progress, and review statuses
+// are all processable (create-story, dev-story, and code-review steps skip
+// gracefully when their own state has already been reached).
+//
+// Used by the batch commands (queue, epic, dispatch) so stories that were
+// drafted ahead of time — sitting at ready-for-dev because someone ran
+// /bmad-create-story manually — get picked up when you kick off a batch.
+func (r *Reader) UnfinishedStories() ([]Entry, error) {
+	entries, err := r.Read()
+	if err != nil {
+		return nil, err
+	}
+
+	result := []Entry{}
+	for _, e := range entries {
+		if e.Type != EntryTypeStory {
+			continue
+		}
+		if e.Status == StatusDone {
+			continue
+		}
+		result = append(result, e)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].EpicNum != result[j].EpicNum {
+			return result[i].EpicNum < result[j].EpicNum
+		}
+		return result[i].StoryNum < result[j].StoryNum
+	})
+
+	return result, nil
+}
+
 // StoriesForEpic returns all story entries for the given epic number, sorted by story number.
 func (r *Reader) StoriesForEpic(n int) ([]Entry, error) {
 	entries, err := r.Read()

@@ -26,20 +26,20 @@ func (p *Pipeline) RunQueue(ctx context.Context) (BatchResult, error) {
 func (p *Pipeline) runQueue(ctx context.Context, run runFunc) (BatchResult, error) {
 	start := time.Now()
 
-	stories, err := p.status.BacklogStories()
+	stories, err := p.status.UnfinishedStories()
 	if err != nil {
 		return BatchResult{}, err
 	}
 
 	if len(stories) == 0 {
 		if p.printer != nil {
-			p.printer.Text("No backlog stories found")
+			p.printer.Text("No unfinished stories found")
 		}
 		return BatchResult{Duration: time.Since(start), StepCounts: map[string]int{}}, nil
 	}
 
 	if p.printer != nil {
-		p.printer.Text(fmt.Sprintf("Processing queue: %d backlog stories", len(stories)))
+		p.printer.Text(fmt.Sprintf("Processing queue: %d unfinished stories", len(stories)))
 	}
 
 	result := p.runBatch(ctx, stories, run)
@@ -72,25 +72,25 @@ func (p *Pipeline) runEpic(ctx context.Context, epicNum int, run runFunc) (Batch
 		return BatchResult{EpicNum: epicNum, Duration: time.Since(start), StepCounts: map[string]int{}}, nil
 	}
 
-	var backlogEntries []status.Entry
+	var pendingEntries []status.Entry
 	for _, e := range allStories {
-		if e.Status == status.StatusBacklog {
-			backlogEntries = append(backlogEntries, e)
+		if e.Status != status.StatusDone {
+			pendingEntries = append(pendingEntries, e)
 		}
 	}
 
-	if len(backlogEntries) == 0 {
+	if len(pendingEntries) == 0 {
 		if p.printer != nil {
-			p.printer.Text(fmt.Sprintf("No backlog stories found for epic %d", epicNum))
+			p.printer.Text(fmt.Sprintf("No unfinished stories found for epic %d", epicNum))
 		}
 		return BatchResult{EpicNum: epicNum, Duration: time.Since(start), StepCounts: map[string]int{}}, nil
 	}
 
 	if p.printer != nil {
-		p.printer.Text(fmt.Sprintf("Processing epic %d: %d backlog stories", epicNum, len(backlogEntries)))
+		p.printer.Text(fmt.Sprintf("Processing epic %d: %d unfinished stories", epicNum, len(pendingEntries)))
 	}
 
-	result := p.runBatch(ctx, backlogEntries, run)
+	result := p.runBatch(ctx, pendingEntries, run)
 	result.EpicNum = epicNum
 	result.Duration = time.Since(start)
 	return result, nil
@@ -109,7 +109,9 @@ func (p *Pipeline) runBatch(ctx context.Context, stories []status.Entry, run run
 			p.printer.Text(fmt.Sprintf("[%d/%d] %s", i+1, len(stories), entry.Key))
 		}
 
-		// Re-read fresh status before each story
+		// Re-read fresh status before each story. Only done stories are
+		// skipped at this layer — ready-for-dev / in-progress / review
+		// stories still flow into Run, which applies per-step resume logic.
 		freshReader := status.NewReader(p.projectDir)
 		freshEntry, err := freshReader.StoryByKey(entry.Key)
 		if err != nil {
@@ -121,8 +123,8 @@ func (p *Pipeline) runBatch(ctx context.Context, stories []status.Entry, run run
 			result.Failed++
 			continue
 		}
-		if freshEntry.Status != status.StatusBacklog {
-			result.Stories = append(result.Stories, StoryResult{Key: entry.Key, Skipped: true})
+		if freshEntry.Status == status.StatusDone {
+			result.Stories = append(result.Stories, StoryResult{Key: entry.Key, Skipped: true, Reason: string(status.StatusDone)})
 			result.Skipped++
 			continue
 		}

@@ -117,19 +117,23 @@ func TestRunEpic(t *testing.T) {
 			wantCreated: 3,
 		},
 		{
-			name:    "mixed statuses: only backlog stories are run",
+			// Mixed statuses: done is skipped, everything else (backlog,
+			// ready-for-dev, in-progress, review) is processed through Run.
+			name:    "mixed statuses: done skipped, others processed",
 			epicNum: 1,
 			entries: [][2]string{
 				{"1-1-scaffold", string(status.StatusBacklog)},
 				{"1-2-schema", string(status.StatusReadyForDev)},
 				{"1-3-registration", string(status.StatusBacklog)},
+				{"1-4-audit", string(status.StatusDone)},
 			},
 			runResults: map[string]StoryResult{
 				"1-1-scaffold":     {Key: "1-1-scaffold", Success: true},
+				"1-2-schema":       {Key: "1-2-schema", Success: true},
 				"1-3-registration": {Key: "1-3-registration", Success: true},
 			},
-			wantLen:     2,
-			wantCreated: 2,
+			wantLen:     3,
+			wantCreated: 3,
 		},
 		{
 			name:    "failure isolation: one story fails, others still process",
@@ -172,10 +176,11 @@ func TestRunEpic(t *testing.T) {
 			wantFailed:  1,
 		},
 		{
-			name:    "all non-backlog: empty BatchResult, run not invoked",
+			// All stories already done: epic is a no-op.
+			name:    "all done: empty BatchResult, run not invoked",
 			epicNum: 1,
 			entries: [][2]string{
-				{"1-1-scaffold", string(status.StatusReadyForDev)},
+				{"1-1-scaffold", string(status.StatusDone)},
 				{"1-2-schema", string(status.StatusDone)},
 			},
 			wantLen:     0,
@@ -261,7 +266,7 @@ func TestRunEpic_PrinterMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
-	assert.Contains(t, out, "Processing epic 1: 2 backlog stories")
+	assert.Contains(t, out, "Processing epic 1: 2 unfinished stories")
 	assert.Contains(t, out, "[1/2] 1-1-scaffold")
 	assert.Contains(t, out, "[2/2] 1-2-schema")
 }
@@ -284,10 +289,13 @@ func TestRunEpic_EmptyPrinterMessage(t *testing.T) {
 	assert.Contains(t, buf.String(), "No stories found for epic 99")
 }
 
-func TestRunEpic_NoBacklogDoesNotCallRun(t *testing.T) {
+func TestRunEpic_NoUnfinishedSkipsAllDone(t *testing.T) {
+	// If every story in an epic is already done, the batch prints a no-op
+	// message and never invokes run. ready-for-dev and other non-done states
+	// are NOT skipped at this level — they flow into Run.
 	tmpDir := t.TempDir()
 	reader := setupBatchStatus(t, tmpDir, []string{"epic-1"}, [][2]string{
-		{"1-1-scaffold", string(status.StatusReadyForDev)},
+		{"1-1-scaffold", string(status.StatusDone)},
 	})
 
 	var buf bytes.Buffer
@@ -297,7 +305,7 @@ func TestRunEpic_NoBacklogDoesNotCallRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, result.Stories)
 	assert.Equal(t, 0, result.Skipped)
-	assert.Contains(t, buf.String(), "No backlog stories found for epic 1")
+	assert.Contains(t, buf.String(), "No unfinished stories found for epic 1")
 }
 
 // --- RunQueue tests ---
@@ -338,7 +346,9 @@ func TestRunQueue(t *testing.T) {
 			wantCreated: 6,
 		},
 		{
-			name:     "mixed statuses: only backlog stories processed",
+			// Mixed statuses: only done is skipped. Every other state
+			// flows into Run and counts as unfinished work.
+			name:     "mixed statuses: done skipped, rest processed",
 			epicKeys: []string{"epic-1", "epic-2"},
 			entries: [][2]string{
 				{"1-1-scaffold", string(status.StatusDone)},
@@ -348,10 +358,11 @@ func TestRunQueue(t *testing.T) {
 			},
 			runResults: map[string]StoryResult{
 				"1-2-schema": {Key: "1-2-schema", Success: true},
+				"2-1-api":    {Key: "2-1-api", Success: true},
 				"2-2-auth":   {Key: "2-2-auth", Success: true},
 			},
-			wantLen:     2,
-			wantCreated: 2,
+			wantLen:     3,
+			wantCreated: 3,
 		},
 		{
 			name:     "empty backlog: returns BatchResult with zero stories",
@@ -481,12 +492,13 @@ func TestRunQueue_EmptyBacklogPrinterMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, len(result.Stories))
-	assert.Contains(t, buf.String(), "No backlog stories found")
+	assert.Contains(t, buf.String(), "No unfinished stories found")
 }
 
-func TestRunQueue_SkipsStoriesNoLongerBacklog(t *testing.T) {
-	// Simulate resumable batch: story is backlog in initial read but changes
-	// status between stories. The fresh-reader re-read catches this.
+func TestRunQueue_SkipsDoneOnFreshRead(t *testing.T) {
+	// Simulate resumable batch: story is unfinished in initial read but
+	// becomes done between iterations (maybe it was being worked on in
+	// another terminal). The fresh-reader re-read catches this and skips.
 	tmpDir := t.TempDir()
 	reader := setupBatchStatus(t, tmpDir, []string{"epic-1"}, [][2]string{
 		{"1-1-scaffold", string(status.StatusBacklog)},
@@ -500,13 +512,14 @@ func TestRunQueue_SkipsStoriesNoLongerBacklog(t *testing.T) {
 	mockRun := func(_ context.Context, key string) (StoryResult, error) {
 		callCount++
 		if key == "1-1-scaffold" {
-			// After processing 1-1, change 1-2's status to simulate BMAD update
+			// After processing 1-1, flip 1-2 directly to done to simulate
+			// it having been completed in another terminal/session.
 			statusPath := filepath.Join(tmpDir, "_bmad-output", "implementation-artifacts", "sprint-status.yaml")
 			data, err := os.ReadFile(statusPath)
 			if err != nil {
 				return StoryResult{}, err
 			}
-			updated := bytes.Replace(data, []byte("1-2-schema: backlog"), []byte("1-2-schema: ready-for-dev"), 1)
+			updated := bytes.Replace(data, []byte("1-2-schema: backlog"), []byte("1-2-schema: done"), 1)
 			if err := os.WriteFile(statusPath, updated, 0o644); err != nil {
 				return StoryResult{}, err
 			}
@@ -521,10 +534,10 @@ func TestRunQueue_SkipsStoriesNoLongerBacklog(t *testing.T) {
 	result, err := p.runQueue(context.Background(), mockRun)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, callCount, "only first story should be run; second skipped on re-read")
+	assert.Equal(t, 1, callCount, "only first story should be run; second skipped on re-read once status is done")
 	require.Len(t, result.Stories, 2)
 	assert.True(t, result.Stories[0].Success)
-	assert.True(t, result.Stories[1].Skipped, "1-2-schema should be skipped after status change")
+	assert.True(t, result.Stories[1].Skipped, "1-2-schema should be skipped after flipping to done")
 	assert.Equal(t, 1, result.StepCounts[stepNameCreate])
 	assert.Equal(t, 1, result.Skipped)
 }
@@ -547,7 +560,7 @@ func TestRunQueue_PrinterMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
-	assert.Contains(t, out, "Processing queue: 2 backlog stories")
+	assert.Contains(t, out, "Processing queue: 2 unfinished stories")
 	assert.Contains(t, out, "[1/2] 1-1-scaffold")
 	assert.Contains(t, out, "[2/2] 1-2-schema")
 }

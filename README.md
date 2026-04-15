@@ -104,18 +104,21 @@ partially-completed story picks up where the previous run left off.
 
 ### epic
 
-Run the full pipeline for every backlog story in one epic, sequentially.
+Run the full pipeline for every **unfinished** story in one epic
+(anything not yet `done`), sequentially.
 
 ```bash
 story-factory epic 1 --mode=bmad
 ```
 
-Finds stories keyed `1-*-*`, sorts by story number, runs each to completion.
-Stops on first hard failure; stories that are already `done` are skipped.
+Finds stories keyed `1-*-*`, filters out ones already at `done`, sorts by
+story number, runs each to completion. Stories at `ready-for-dev`,
+`in-progress`, or `review` flow into `run`, which applies per-step resume
+logic so work already done isn't repeated.
 
 ### queue
 
-Run the full pipeline for every backlog story across all epics,
+Run the full pipeline for every unfinished story across all epics,
 sequentially, in epic-then-story order.
 
 ```bash

@@ -35,6 +35,12 @@ type StatusReader interface {
 	// sorted by epic number then story number.
 	BacklogStories() ([]status.Entry, error)
 
+	// UnfinishedStories returns every non-done story entry (backlog,
+	// ready-for-dev, in-progress, review), sorted by epic number then
+	// story number. Batch commands use this to resume work on stories
+	// that were already drafted before story-factory was invoked.
+	UnfinishedStories() ([]status.Entry, error)
+
 	// StoriesByStatus returns all story entries matching the given status,
 	// sorted by epic number then story number.
 	StoriesByStatus(status string) ([]status.Entry, error)
