@@ -126,12 +126,16 @@ func (c *Config) GetPrompt(workflowName, storyKey string) (string, error) {
 	return expandTemplate(workflow.PromptTemplate, PromptData{StoryKey: storyKey})
 }
 
-// GetFullCycleSteps returns the list of workflow steps for a full lifecycle.
+// GetModeSteps returns the ordered step names for a pipeline mode.
 //
-// This returns the configured FullCycle.Steps slice, which defines the
-// sequence of workflows to execute for run, queue, and epic commands.
-func (c *Config) GetFullCycleSteps() []string {
-	return c.FullCycle.Steps
+// Returns an error if the mode is not defined in [Config.Modes]. Callers
+// should use the mode constants [ModeBmad] and [ModeBeads] to avoid typos.
+func (c *Config) GetModeSteps(mode string) ([]string, error) {
+	m, ok := c.Modes[mode]
+	if !ok {
+		return nil, fmt.Errorf("unknown mode: %s", mode)
+	}
+	return m.Steps, nil
 }
 
 // expandTemplate expands a Go template string with the given data.

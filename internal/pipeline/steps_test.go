@@ -18,49 +18,6 @@ import (
 	"story-factory/internal/status"
 )
 
-// testValidationExecutor wraps the claude.Executor interface and optionally
-// modifies the story file during execution to simulate BMAD applying suggestions.
-type testValidationExecutor struct {
-	filePath     string
-	modifyOnCall []bool // per-call: true = touch file, false = leave unchanged
-	callCount    int
-	exitCodes    []int // per-call exit codes (default 0)
-	failOnCall   []error
-}
-
-func (m *testValidationExecutor) Execute(ctx context.Context, prompt string) (<-chan claude.Event, error) {
-	ch := make(chan claude.Event)
-	close(ch)
-	return ch, nil
-}
-
-func (m *testValidationExecutor) ExecuteWithResult(ctx context.Context, prompt string, handler claude.EventHandler) (int, error) {
-	idx := m.callCount
-	m.callCount++
-
-	if idx < len(m.failOnCall) && m.failOnCall[idx] != nil {
-		return 1, m.failOnCall[idx]
-	}
-
-	if idx < len(m.modifyOnCall) && m.modifyOnCall[idx] {
-		// Write new content AND explicitly advance mtime to ensure detection.
-		// Filesystem mtime resolution varies; explicit Chtimes guarantees a
-		// detectable change regardless of how fast the test runs.
-		err := os.WriteFile(m.filePath, []byte(fmt.Sprintf("modified-%d", idx)), 0644)
-		if err != nil {
-			return 1, err
-		}
-		future := time.Now().Add(time.Duration(idx+1) * time.Second)
-		_ = os.Chtimes(m.filePath, future, future)
-	}
-
-	exitCode := 0
-	if idx < len(m.exitCodes) {
-		exitCode = m.exitCodes[idx]
-	}
-	return exitCode, nil
-}
-
 // testConfig returns a minimal config with the create-story prompt template.
 func testConfig() *config.Config {
 	cfg := config.DefaultConfig()
@@ -78,141 +35,8 @@ func setupStoryFile(t *testing.T, dir string, key string) string {
 	return storyPath
 }
 
-func TestStepValidate(t *testing.T) {
-	tests := []struct {
-		name            string
-		modifyOnCall    []bool
-		exitCodes       []int
-		failOnCall      []error
-		createFile      bool
-		wantSuccess     bool
-		wantReason      string
-		wantLoops       int
-		wantErr         bool
-		wantErrContains string
-	}{
-		{
-			name:         "converges on first loop (mtime unchanged)",
-			modifyOnCall: []bool{false},
-			createFile:   true,
-			wantSuccess:  true,
-			wantLoops:    1,
-		},
-		{
-			name:         "converges on 2nd loop (mtime changes once then stable)",
-			modifyOnCall: []bool{true, false},
-			createFile:   true,
-			wantSuccess:  true,
-			wantLoops:    2,
-		},
-		{
-			name:         "converges on 3rd loop",
-			modifyOnCall: []bool{true, true, false},
-			createFile:   true,
-			wantSuccess:  true,
-			wantLoops:    3,
-		},
-		{
-			name:         "exhaustion after 3 loops (mtime always changes)",
-			modifyOnCall: []bool{true, true, true},
-			createFile:   true,
-			wantSuccess:  false,
-			wantReason:   "needs-review",
-			wantLoops:    3,
-		},
-		{
-			name:            "claude subprocess failure returns error",
-			failOnCall:      []error{fmt.Errorf("connection refused")},
-			createFile:      true,
-			wantErr:         true,
-			wantErrContains: "claude execution failed",
-		},
-		{
-			name:        "claude non-zero exit is operational failure",
-			exitCodes:   []int{1},
-			createFile:  true,
-			wantSuccess: false,
-			wantReason:  "validate story 1-2-test-story: claude exited with code 1",
-			wantLoops:   1,
-		},
-		{
-			name:            "missing story file returns error",
-			createFile:      false,
-			wantErr:         true,
-			wantErrContains: "cannot stat story file",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			key := "1-2-test-story"
-
-			writeMinimalSprintStatus(t, dir, key)
-
-			var storyPath string
-			if tt.createFile {
-				storyPath = setupStoryFile(t, dir, key)
-			} else {
-				storyPath = filepath.Join(dir, "_bmad-output", "implementation-artifacts", key+".md")
-			}
-
-			executor := &testValidationExecutor{
-				filePath:     storyPath,
-				modifyOnCall: tt.modifyOnCall,
-				exitCodes:    tt.exitCodes,
-				failOnCall:   tt.failOnCall,
-			}
-
-			cfg := testConfig()
-			p := NewPipeline(executor, cfg, dir,
-				WithStatus(status.NewReader(dir)),
-			)
-
-			result, err := p.StepValidate(context.Background(), key)
-
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrContains)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, stepNameValidate, result.Name)
-			assert.Equal(t, tt.wantSuccess, result.Success)
-			assert.Equal(t, tt.wantReason, result.Reason)
-			assert.Equal(t, tt.wantLoops, result.ValidationLoops)
-			assert.True(t, result.Duration > 0, "duration should be positive")
-		})
-	}
-}
-
-func TestStepValidate_ContextCancellation(t *testing.T) {
-	dir := t.TempDir()
-	key := "1-2-test-story"
-	writeMinimalSprintStatus(t, dir, key)
-	storyPath := setupStoryFile(t, dir, key)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	executor := &testValidationExecutor{
-		filePath: storyPath,
-		failOnCall: []error{
-			fmt.Errorf("context canceled"),
-		},
-	}
-
-	cfg := testConfig()
-	p := NewPipeline(executor, cfg, dir,
-		WithStatus(status.NewReader(dir)),
-	)
-
-	result, err := p.StepValidate(ctx, key)
-	require.NoError(t, err)
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Reason, "canceled")
-}
+// StepValidate was removed — BMAD v6's create-story skill self-validates,
+// making the extra loop redundant. See Phase 1 refactor.
 
 // --- StepCreate tests ---
 
@@ -284,7 +108,7 @@ func TestStepCreate_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.Success)
-	assert.Equal(t, "create", result.Name)
+	assert.Equal(t, stepNameCreate, result.Name)
 	assert.True(t, result.Duration > 0)
 	assert.Len(t, mock.RecordedPrompts, 1)
 	assert.Contains(t, mock.RecordedPrompts[0], key)
@@ -304,7 +128,7 @@ func TestStepCreate_FileNotCreated(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Success)
 	assert.Contains(t, result.Reason, "not created")
-	assert.Equal(t, "create", result.Name)
+	assert.Equal(t, stepNameCreate, result.Name)
 }
 
 func TestStepCreate_StatusNotUpdated(t *testing.T) {
@@ -524,7 +348,7 @@ func TestStepSync_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, result.Success)
-	assert.Equal(t, "sync", result.Name)
+	assert.Equal(t, stepNameSync, result.Name)
 	assert.Equal(t, "bd-abc123", result.BeadID)
 	assert.True(t, result.Duration > 0)
 
@@ -551,7 +375,7 @@ func TestStepSync_BdCreateFailure(t *testing.T) {
 
 	require.NoError(t, err) // operational failure, not infra
 	assert.False(t, result.Success)
-	assert.Equal(t, "sync", result.Name)
+	assert.Equal(t, stepNameSync, result.Name)
 	assert.Contains(t, result.Reason, "bd create")
 	assert.Contains(t, result.Reason, "connection refused")
 
@@ -599,34 +423,8 @@ func TestStepSync_FileNotFound(t *testing.T) {
 
 	require.Error(t, err) // infrastructure failure
 	assert.Contains(t, err.Error(), "read story file")
-	assert.Equal(t, "sync", result.Name)
+	assert.Equal(t, stepNameSync, result.Name)
 	assert.Empty(t, mock.Calls)
-}
-
-func TestStepValidate_DryRun(t *testing.T) {
-	dir := t.TempDir()
-	key := "1-2-test-story"
-	writeMinimalSprintStatus(t, dir, key)
-	printer := &mockPrinter{}
-
-	executor := &testValidationExecutor{}
-
-	cfg := testConfig()
-	p := NewPipeline(executor, cfg, dir,
-		WithStatus(status.NewReader(dir)),
-		WithPrinter(printer),
-		WithDryRun(true),
-	)
-
-	result, err := p.StepValidate(context.Background(), key)
-
-	require.NoError(t, err)
-	assert.True(t, result.Success)
-	assert.Contains(t, result.Reason, "dry-run")
-	assert.Equal(t, stepNameValidate, result.Name)
-	assert.Equal(t, 0, executor.callCount, "should not invoke Claude in dry-run")
-	require.Len(t, printer.texts, 1)
-	assert.Contains(t, printer.texts[0], "dry-run")
 }
 
 func TestStepSync_DryRun(t *testing.T) {

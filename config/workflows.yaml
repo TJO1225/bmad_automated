@@ -1,6 +1,16 @@
 workflows:
   create-story:
     prompt_template: "/bmad-create-story - Create story: {{.StoryKey}}. Do not ask questions."
+  dev-story:
+    prompt_template: "/bmad-dev-story - Implement story: {{.StoryKey}}. Do not ask questions."
+  code-review:
+    prompt_template: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree."
+
+modes:
+  bmad:
+    steps: [create-story, dev-story, code-review, commit-branch, open-pr]
+  beads:
+    steps: [create-story, sync-to-beads]
 
 claude:
   output_format: stream-json

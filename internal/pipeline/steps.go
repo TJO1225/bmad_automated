@@ -15,11 +15,15 @@ import (
 	"story-factory/internal/status"
 )
 
+// Step name constants — these must match the keys in [config.Config.Modes]
+// step lists and the names registered in [Pipeline.stepRegistry].
 const (
-	maxValidationLoops = 3
-	stepNameValidate   = "validate"
-	stepNameCreate     = "create"
-	stepNameSync       = "sync"
+	stepNameCreate       = "create-story"
+	stepNameDevStory     = "dev-story"
+	stepNameCodeReview   = "code-review"
+	stepNameSync         = "sync-to-beads"
+	stepNameCommitBranch = "commit-branch"
+	stepNameOpenPR       = "open-pr"
 
 	// DefaultTimeout is the maximum duration for a single Claude subprocess.
 	// Set high enough for complex skills that do research (create-story, dev-story).
@@ -28,9 +32,9 @@ const (
 
 // Pipeline orchestrates multi-step story processing workflows.
 //
-// Each step method (StepCreate, StepValidate, stepSync) runs one phase
-// of the lifecycle. The Pipeline holds injected dependencies so steps
-// can invoke Claude, read configuration, and resolve file paths.
+// Each step method (StepCreate, StepDevStory, StepCodeReview, stepSync) runs
+// one phase of the lifecycle. The Pipeline holds injected dependencies so
+// steps can invoke Claude, read configuration, and resolve file paths.
 type Pipeline struct {
 	claude     claude.Executor
 	beads      beads.Executor
@@ -38,6 +42,7 @@ type Pipeline struct {
 	printer    Printer
 	cfg        *config.Config
 	projectDir string
+	mode       string
 	dryRun     bool
 	verbose    bool
 }
@@ -48,6 +53,7 @@ func NewPipeline(executor claude.Executor, cfg *config.Config, projectDir string
 		claude:     executor,
 		cfg:        cfg,
 		projectDir: projectDir,
+		mode:       config.ModeBmad,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -83,6 +89,16 @@ func WithVerbose(v bool) PipelineOption {
 	return func(p *Pipeline) { p.verbose = v }
 }
 
+// WithMode sets the pipeline mode (e.g. [config.ModeBmad], [config.ModeBeads]).
+// If unset, the pipeline defaults to [config.ModeBmad].
+func WithMode(mode string) PipelineOption {
+	return func(p *Pipeline) {
+		if mode != "" {
+			p.mode = mode
+		}
+	}
+}
+
 // StepCreate runs the story creation step: invoke Claude to create a story file
 // from a backlog entry, then verify post-conditions (file exists, status changed).
 //
@@ -90,7 +106,6 @@ func WithVerbose(v bool) PipelineOption {
 func (p *Pipeline) StepCreate(ctx context.Context, key string) (StepResult, error) {
 	start := time.Now()
 
-	// Dry-run: skip subprocess invocation
 	if p.dryRun {
 		msg := "dry-run: would create story " + key
 		if p.printer != nil {
@@ -107,17 +122,14 @@ func (p *Pipeline) StepCreate(ctx context.Context, key string) (StepResult, erro
 		return StepResult{}, fmt.Errorf("create story %s: pipeline has no status reader", key)
 	}
 
-	// Expand prompt template
 	prompt, err := p.cfg.GetPrompt("create-story", key)
 	if err != nil {
 		return StepResult{}, fmt.Errorf("create story %s: %w", key, err)
 	}
 
-	// Create timeout context
 	timeoutCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
 	defer cancel()
 
-	// Build event handler: forward text to printer if verbose
 	var handler claude.EventHandler
 	if p.verbose && p.printer != nil {
 		handler = func(event claude.Event) {
@@ -127,7 +139,6 @@ func (p *Pipeline) StepCreate(ctx context.Context, key string) (StepResult, erro
 		}
 	}
 
-	// Run Claude
 	exitCode, err := p.claude.ExecuteWithResult(timeoutCtx, prompt, handler)
 	if err != nil {
 		switch {
@@ -203,127 +214,7 @@ func (p *Pipeline) StepCreate(ctx context.Context, key string) (StepResult, erro
 	}, nil
 }
 
-// StepValidate runs the validation loop for a story file.
-//
-// It invokes Claude up to [maxValidationLoops] times using the create-story
-// prompt (BMAD auto-detects validation when the file already exists).
-// After each invocation, the story file's mtime is compared to its value
-// before invocation. If the mtime is unchanged, the story has converged
-// (no suggestions applied) and validation succeeds. If the mtime still
-// changes on the final iteration, the story needs manual review.
-//
-// Returns a [StepResult] for operational outcomes (convergence or exhaustion)
-// and an error for infrastructure failures (missing file, Claude error, etc.).
-func (p *Pipeline) StepValidate(ctx context.Context, key string) (StepResult, error) {
-	start := time.Now()
-
-	if p.dryRun {
-		msg := "dry-run: would validate story " + key
-		if p.printer != nil {
-			p.printer.Text(msg)
-		}
-		return StepResult{
-			Name:    stepNameValidate,
-			Success: true,
-			Reason:  msg,
-		}, nil
-	}
-
-	if p.status == nil {
-		return StepResult{}, fmt.Errorf("stepValidate: status reader not configured")
-	}
-	storyDir, err := p.status.ResolveStoryLocation(p.projectDir)
-	if err != nil {
-		return StepResult{}, fmt.Errorf("stepValidate: resolve story location: %w", err)
-	}
-	storyPath := filepath.Join(storyDir, key+".md")
-
-	prompt, err := p.cfg.GetPrompt("create-story", key)
-	if err != nil {
-		return StepResult{}, fmt.Errorf("stepValidate: failed to expand prompt: %w", err)
-	}
-
-	var handler claude.EventHandler
-	if p.verbose && p.printer != nil {
-		handler = func(event claude.Event) {
-			if event.IsText() {
-				p.printer.Text(event.Text)
-			}
-		}
-	}
-
-	for loop := 1; loop <= maxValidationLoops; loop++ {
-		// Stat before invocation
-		infoBefore, err := os.Stat(storyPath)
-		if err != nil {
-			return StepResult{}, fmt.Errorf("stepValidate: cannot stat story file: %w", err)
-		}
-		mtimeBefore := infoBefore.ModTime()
-
-		// Invoke Claude (per-loop timeout, same as StepCreate)
-		timeoutCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
-		exitCode, err := p.claude.ExecuteWithResult(timeoutCtx, prompt, handler)
-		ctxDone := timeoutCtx.Err()
-		cancel()
-		if err != nil {
-			switch {
-			case errors.Is(err, context.DeadlineExceeded) || errors.Is(ctxDone, context.DeadlineExceeded):
-				return StepResult{
-					Name:            stepNameValidate,
-					Success:         false,
-					Reason:          "validate story " + key + ": timed out",
-					Duration:        time.Since(start),
-					ValidationLoops: loop,
-				}, nil
-			case errors.Is(err, context.Canceled) || errors.Is(ctxDone, context.Canceled):
-				return StepResult{
-					Name:            stepNameValidate,
-					Success:         false,
-					Reason:          "validate story " + key + ": canceled",
-					Duration:        time.Since(start),
-					ValidationLoops: loop,
-				}, nil
-			default:
-				return StepResult{}, fmt.Errorf("stepValidate: claude execution failed: %w", err)
-			}
-		}
-		if exitCode != 0 {
-			return StepResult{
-				Name:            stepNameValidate,
-				Success:         false,
-				Reason:          fmt.Sprintf("validate story %s: claude exited with code %d", key, exitCode),
-				Duration:        time.Since(start),
-				ValidationLoops: loop,
-			}, nil
-		}
-
-		// Stat after invocation
-		infoAfter, err := os.Stat(storyPath)
-		if err != nil {
-			return StepResult{}, fmt.Errorf("stepValidate: cannot stat story file after invocation: %w", err)
-		}
-		mtimeAfter := infoAfter.ModTime()
-
-		// Converged: mtime unchanged
-		if mtimeAfter.Equal(mtimeBefore) {
-			return StepResult{
-				Name:            stepNameValidate,
-				Success:         true,
-				Duration:        time.Since(start),
-				ValidationLoops: loop,
-			}, nil
-		}
-	}
-
-	// Exhausted all loops without convergence
-	return StepResult{
-		Name:            stepNameValidate,
-		Success:         false,
-		Reason:          "needs-review",
-		Duration:        time.Since(start),
-		ValidationLoops: maxValidationLoops,
-	}, nil
-}
+// StepDevStory and StepCodeReview are implemented in steps_bmad.go.
 
 // stepSync synchronizes a validated story to Gastown Beads via the Pipeline's
 // beads executor. Unlike the static [StepSync], this method has access to
@@ -342,6 +233,13 @@ func (p *Pipeline) stepSync(ctx context.Context, key string) (StepResult, error)
 	}
 
 	start := time.Now()
+
+	if p.status == nil {
+		return StepResult{}, fmt.Errorf("stepSync: pipeline has no status reader")
+	}
+	if p.beads == nil {
+		return StepResult{}, fmt.Errorf("stepSync: pipeline has no beads executor")
+	}
 
 	storyDir, err := p.status.ResolveStoryLocation(p.projectDir)
 	if err != nil {
@@ -412,13 +310,11 @@ func (p *Pipeline) stepSync(ctx context.Context, key string) (StepResult, error)
 func StepSync(ctx context.Context, beadsExec beads.Executor, storyPath, key string) (StepResult, error) {
 	start := time.Now()
 
-	// 1. Read the story file
 	content, err := os.ReadFile(storyPath)
 	if err != nil {
 		return StepResult{Name: stepNameSync}, fmt.Errorf("read story file %s: %w", storyPath, err)
 	}
 
-	// 2. Extract title
 	title, err := beads.ExtractTitle(string(content))
 	if err != nil {
 		return StepResult{
@@ -429,7 +325,6 @@ func StepSync(ctx context.Context, beadsExec beads.Executor, storyPath, key stri
 		}, nil
 	}
 
-	// 3. Extract acceptance criteria
 	acs, err := beads.ExtractAcceptanceCriteria(string(content))
 	if err != nil {
 		return StepResult{
@@ -440,7 +335,6 @@ func StepSync(ctx context.Context, beadsExec beads.Executor, storyPath, key stri
 		}, nil
 	}
 
-	// 4. Invoke bd create
 	beadID, err := beadsExec.Create(ctx, key, title, acs, nil)
 	if err != nil {
 		return StepResult{
@@ -451,7 +345,6 @@ func StepSync(ctx context.Context, beadsExec beads.Executor, storyPath, key stri
 		}, nil
 	}
 
-	// 5. Append tracking comment
 	if err := beads.AppendTrackingComment(storyPath, beadID); err != nil {
 		return StepResult{
 			Name:     stepNameSync,

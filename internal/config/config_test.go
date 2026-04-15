@@ -12,14 +12,16 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	// Check workflows exist
+	// Check workflows exist (v6 BMAD slash-commands)
 	assert.Contains(t, cfg.Workflows, "create-story")
 	assert.Contains(t, cfg.Workflows, "dev-story")
 	assert.Contains(t, cfg.Workflows, "code-review")
-	assert.Contains(t, cfg.Workflows, "git-commit")
 
-	// Check full cycle steps
-	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "git-commit"}, cfg.FullCycle.Steps)
+	// Check modes exist with expected step sequences
+	assert.Contains(t, cfg.Modes, ModeBmad)
+	assert.Contains(t, cfg.Modes, ModeBeads)
+	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr"}, cfg.Modes[ModeBmad].Steps)
+	assert.Equal(t, []string{"create-story", "sync-to-beads"}, cfg.Modes[ModeBeads].Steps)
 
 	// Check defaults
 	assert.Equal(t, "stream-json", cfg.Claude.OutputFormat)
@@ -73,11 +75,19 @@ func TestConfig_GetPrompt(t *testing.T) {
 	}
 }
 
-func TestConfig_GetFullCycleSteps(t *testing.T) {
+func TestConfig_GetModeSteps(t *testing.T) {
 	cfg := DefaultConfig()
-	steps := cfg.GetFullCycleSteps()
 
-	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "git-commit"}, steps)
+	bmad, err := cfg.GetModeSteps(ModeBmad)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr"}, bmad)
+
+	beads, err := cfg.GetModeSteps(ModeBeads)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"create-story", "sync-to-beads"}, beads)
+
+	_, err = cfg.GetModeSteps("nonexistent")
+	assert.Error(t, err)
 }
 
 func TestLoader_LoadFromFile(t *testing.T) {
@@ -89,9 +99,10 @@ func TestLoader_LoadFromFile(t *testing.T) {
 workflows:
   custom-workflow:
     prompt_template: "Custom: {{.StoryKey}}"
-full_cycle:
-  steps:
-    - custom-workflow
+modes:
+  custom:
+    steps:
+      - custom-workflow
 claude:
   binary_path: /custom/path/claude
 output:
@@ -105,7 +116,7 @@ output:
 
 	require.NoError(t, err)
 	assert.Contains(t, cfg.Workflows, "custom-workflow")
-	assert.Equal(t, []string{"custom-workflow"}, cfg.FullCycle.Steps)
+	assert.Equal(t, []string{"custom-workflow"}, cfg.Modes["custom"].Steps)
 	assert.Equal(t, "/custom/path/claude", cfg.Claude.BinaryPath)
 	assert.Equal(t, 50, cfg.Output.TruncateLines)
 }
@@ -292,7 +303,7 @@ func TestMustLoad_Success(t *testing.T) {
 func TestConfig_GetPrompt_AllWorkflows(t *testing.T) {
 	cfg := DefaultConfig()
 
-	workflows := []string{"create-story", "dev-story", "code-review", "git-commit"}
+	workflows := []string{"create-story", "dev-story", "code-review"}
 
 	for _, wf := range workflows {
 		t.Run(wf, func(t *testing.T) {

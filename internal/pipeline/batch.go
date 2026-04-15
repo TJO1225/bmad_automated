@@ -35,7 +35,7 @@ func (p *Pipeline) runQueue(ctx context.Context, run runFunc) (BatchResult, erro
 		if p.printer != nil {
 			p.printer.Text("No backlog stories found")
 		}
-		return BatchResult{Duration: time.Since(start)}, nil
+		return BatchResult{Duration: time.Since(start), StepCounts: map[string]int{}}, nil
 	}
 
 	if p.printer != nil {
@@ -69,7 +69,7 @@ func (p *Pipeline) runEpic(ctx context.Context, epicNum int, run runFunc) (Batch
 		if p.printer != nil {
 			p.printer.Text(fmt.Sprintf("No stories found for epic %d", epicNum))
 		}
-		return BatchResult{EpicNum: epicNum, Duration: time.Since(start)}, nil
+		return BatchResult{EpicNum: epicNum, Duration: time.Since(start), StepCounts: map[string]int{}}, nil
 	}
 
 	var backlogEntries []status.Entry
@@ -83,7 +83,7 @@ func (p *Pipeline) runEpic(ctx context.Context, epicNum int, run runFunc) (Batch
 		if p.printer != nil {
 			p.printer.Text(fmt.Sprintf("No backlog stories found for epic %d", epicNum))
 		}
-		return BatchResult{EpicNum: epicNum, Duration: time.Since(start)}, nil
+		return BatchResult{EpicNum: epicNum, Duration: time.Since(start), StepCounts: map[string]int{}}, nil
 	}
 
 	if p.printer != nil {
@@ -102,7 +102,7 @@ func (p *Pipeline) runEpic(ctx context.Context, epicNum int, run runFunc) (Batch
 // backlog between iterations are skipped without invoking run (needed when run is a mock).
 // Infrastructure errors from run are recorded as failures without aborting the batch.
 func (p *Pipeline) runBatch(ctx context.Context, stories []status.Entry, run runFunc) BatchResult {
-	var result BatchResult
+	result := BatchResult{StepCounts: map[string]int{}}
 
 	for i, entry := range stories {
 		if p.printer != nil {
@@ -129,7 +129,6 @@ func (p *Pipeline) runBatch(ctx context.Context, stories []status.Entry, run run
 
 		storyResult, err := run(ctx, entry.Key)
 		if err != nil {
-			// Infrastructure error — record as failed, continue batch
 			result.Stories = append(result.Stories, StoryResult{
 				Key:      entry.Key,
 				FailedAt: "infrastructure",
@@ -140,14 +139,26 @@ func (p *Pipeline) runBatch(ctx context.Context, stories []status.Entry, run run
 		}
 
 		result.Stories = append(result.Stories, storyResult)
-		if storyResult.Skipped {
+		switch {
+		case storyResult.Skipped:
 			result.Skipped++
-		} else if storyResult.Success {
-			result.Created++
-			result.Validated++
-			result.Synced++
-		} else {
+		case storyResult.Success:
+			for _, stepName := range storyResult.StepsExecuted {
+				result.StepCounts[stepName]++
+			}
+		default:
 			result.Failed++
+			if storyResult.NeedsReview {
+				result.NeedsReview++
+			}
+			// Count steps that succeeded before the failing step.
+			// StepsExecuted includes the failed step at the end, so drop it.
+			for i, stepName := range storyResult.StepsExecuted {
+				if i == len(storyResult.StepsExecuted)-1 {
+					break
+				}
+				result.StepCounts[stepName]++
+			}
 		}
 	}
 

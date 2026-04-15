@@ -14,12 +14,12 @@ import (
 
 // newRunCommand creates the run Cobra command.
 //
-// The run command executes the full pipeline (create -> validate -> sync) for a
-// single story key.
+// The run command executes the configured pipeline mode's full step sequence
+// for a single story key. The step list is mode-dependent; see --mode.
 func newRunCommand(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run <story-key>",
-		Short: "Run the full create-validate-sync pipeline for a story",
+		Short: "Run the full pipeline for a story (steps depend on --mode)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			storyKey := args[0]
@@ -55,6 +55,7 @@ func newRunCommand(app *App) *cobra.Command {
 				pipeline.WithBeads(bdExecutor),
 				pipeline.WithDryRun(app.DryRun),
 				pipeline.WithVerbose(app.Verbose),
+				pipeline.WithMode(app.Mode),
 			)
 
 			// Execute full pipeline
@@ -77,12 +78,21 @@ func newRunCommand(app *App) *cobra.Command {
 				if result.Reason != "" {
 					app.Printer.Text(fmt.Sprintf("Reason: %s", result.Reason))
 				}
+				if result.NeedsReview {
+					app.Printer.Text(fmt.Sprintf("Story %s needs review — re-run after addressing findings", storyKey))
+				}
 				app.Printer.CycleFailed(storyKey, result.FailedAt, result.Duration)
 				return NewExitError(1)
 			}
 
-			app.Printer.Text(fmt.Sprintf("Story %s processed successfully (bead: %s, validation loops: %d)",
-				storyKey, result.BeadID, result.ValidationLoops))
+			details := fmt.Sprintf("steps: %v", result.StepsExecuted)
+			if result.BeadID != "" {
+				details += fmt.Sprintf(", bead: %s", result.BeadID)
+			}
+			if result.PRURL != "" {
+				details += fmt.Sprintf(", pr: %s", result.PRURL)
+			}
+			app.Printer.Text(fmt.Sprintf("Story %s processed successfully (%s)", storyKey, details))
 			return nil
 		},
 	}

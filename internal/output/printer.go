@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,22 +40,27 @@ type StoryResult struct {
 	Reason string
 	// Skipped indicates the story was skipped because it was already done.
 	Skipped bool
-	// ValidationLoops is how many validation attempts were needed.
-	ValidationLoops int
-	// BeadID is the bead identifier created during sync.
+	// NeedsReview indicates code-review flipped the story back to in-progress
+	// because findings remain. Surfaced distinctly from ordinary failures.
+	NeedsReview bool
+	// BeadID is the bead identifier created during sync (beads mode only).
 	BeadID string
+	// PRURL is the pull-request URL opened by the open-pr step (Phase 2).
+	PRURL string
+	// StepsExecuted lists the step names that ran for this story, in order.
+	StepsExecuted []string
 }
 
 // BatchCounts holds pre-computed counts from a batch operation.
 //
 // Counts are populated by pipeline batch methods from the Stories slice.
-// The Printer displays these as-is without recounting.
+// StepCounts maps step name -> count of stories that completed that step
+// successfully, so the totals line adapts to the active mode.
 type BatchCounts struct {
-	Created   int
-	Validated int
-	Synced    int
-	Failed    int
-	Skipped   int
+	StepCounts  map[string]int
+	Failed      int
+	Skipped     int
+	NeedsReview int
 }
 
 // Printer defines the interface for structured terminal output operations.
@@ -218,7 +224,7 @@ func (p *DefaultPrinter) Divider() {
 // CycleHeader prints the header for a full cycle run.
 func (p *DefaultPrinter) CycleHeader(storyKey string) {
 	p.writeln("")
-	content := fmt.Sprintf("BMAD Full Cycle: %s\nSteps: create-story → dev-story → code-review → git-commit", storyKey)
+	content := fmt.Sprintf("Story Factory: %s", storyKey)
 	p.writeln(headerStyle.Render(content))
 	p.writeln("")
 }
@@ -357,17 +363,42 @@ func formatStoryRow(r StoryResult) string {
 		return fmt.Sprintf("%s %-30s  %s", mutedStyle.Render("↷"), r.Key, mutedStyle.Render("(skipped)"))
 	}
 	if r.Success {
-		details := fmt.Sprintf("loops:%d  bead:%s  %s", r.ValidationLoops, r.BeadID, r.Duration.Round(time.Second))
-		return fmt.Sprintf("%s %-30s  %s", successStyle.Render(iconSuccess), r.Key, details)
+		detail := fmt.Sprintf("steps:%d  %s", len(r.StepsExecuted), r.Duration.Round(time.Second))
+		if r.BeadID != "" {
+			detail = fmt.Sprintf("bead:%s  %s", r.BeadID, detail)
+		}
+		if r.PRURL != "" {
+			detail = fmt.Sprintf("pr:%s  %s", r.PRURL, detail)
+		}
+		return fmt.Sprintf("%s %-30s  %s", successStyle.Render(iconSuccess), r.Key, detail)
+	}
+	if r.NeedsReview {
+		detail := fmt.Sprintf("needs-review at %s  %s", r.FailedAt, r.Duration.Round(time.Second))
+		return fmt.Sprintf("%s %-30s  %s", labelStyle.Render("!"), r.Key, detail)
 	}
 	details := fmt.Sprintf("%s: %s  %s", r.FailedAt, r.Reason, r.Duration.Round(time.Second))
 	return fmt.Sprintf("%s %-30s  %s", errorStyle.Render(iconError), r.Key, details)
 }
 
-// formatTotals renders the batch counts totals line.
+// formatTotals renders the batch counts totals line. Step counts are shown
+// in a stable alphabetical order so the output is deterministic regardless
+// of map iteration order.
 func formatTotals(c BatchCounts) string {
-	return fmt.Sprintf("Created: %d | Validated: %d | Synced: %d | Failed: %d | Skip: %d",
-		c.Created, c.Validated, c.Synced, c.Failed, c.Skipped)
+	var parts []string
+	names := make([]string, 0, len(c.StepCounts))
+	for name := range c.StepCounts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s: %d", name, c.StepCounts[name]))
+	}
+	parts = append(parts, fmt.Sprintf("Failed: %d", c.Failed))
+	parts = append(parts, fmt.Sprintf("Skip: %d", c.Skipped))
+	if c.NeedsReview > 0 {
+		parts = append(parts, fmt.Sprintf("NeedsReview: %d", c.NeedsReview))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // epicNumFromKey extracts the epic number from a story key (e.g., "3-1-slug" → 3).

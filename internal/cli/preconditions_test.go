@@ -31,8 +31,10 @@ func setupPreconditionEnv(t *testing.T, sprintStatus bool, bmadAgents bool) (str
 	}
 
 	if bmadAgents {
-		agentDir := filepath.Join(dir, ".claude", "skills", "bmad-create-story")
-		require.NoError(t, os.MkdirAll(agentDir, 0755))
+		for _, name := range []string{"bmad-create-story", "bmad-dev-story", "bmad-code-review"} {
+			agentDir := filepath.Join(dir, ".claude", "skills", name)
+			require.NoError(t, os.MkdirAll(agentDir, 0755))
+		}
 	}
 
 	origDir, err := os.Getwd()
@@ -102,17 +104,37 @@ func TestRunPreconditions_ExitCode2OnFailure(t *testing.T) {
 	assert.Equal(t, 2, code, "exit code should be 2 for precondition failures")
 }
 
-func TestRunPreconditions_SuccessWhenAllPresent(t *testing.T) {
+func TestRunPreconditions_SuccessWhenAllPresent_BmadMode(t *testing.T) {
 	_, cleanup := setupPreconditionEnv(t, true, true)
 	defer cleanup()
 
 	var buf bytes.Buffer
 	app := &App{
+		Mode:    "bmad",
+		Printer: output.NewPrinterWithWriter(&buf),
+		// The real CheckAll requires git repo + gh CLI + clean tree in bmad
+		// mode, which is environmental. Bypass with a stub so we only
+		// exercise the RunPreconditions plumbing.
+		CheckPreconditions: func(string) error { return nil },
+	}
+
+	err := app.RunPreconditions()
+	assert.NoError(t, err, "stub precondition should succeed")
+	assert.Empty(t, buf.String())
+}
+
+func TestRunPreconditions_BeadsMode_ChecksBdCLI(t *testing.T) {
+	_, cleanup := setupPreconditionEnv(t, true, true)
+	defer cleanup()
+
+	var buf bytes.Buffer
+	app := &App{
+		Mode:    "beads",
 		Printer: output.NewPrinterWithWriter(&buf),
 	}
 
 	err := app.RunPreconditions()
-	// May fail if bd is not on PATH — that's acceptable in this test environment.
+	// May fail if bd is not on PATH — that's acceptable in CI environments.
 	if err != nil {
 		code, ok := IsExitError(err)
 		require.True(t, ok)

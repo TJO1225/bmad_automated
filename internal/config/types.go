@@ -9,6 +9,7 @@
 //   - [Config] is the root configuration container with all settings
 //   - [Loader] handles Viper-based configuration loading
 //   - [WorkflowConfig] defines a single workflow's prompt template
+//   - [ModeConfig] defines an ordered sequence of steps for a pipeline mode
 //   - [ClaudeConfig] contains Claude CLI binary settings
 //
 // Configuration priority (highest to lowest):
@@ -17,6 +18,17 @@
 //  3. ./config/workflows.yaml
 //  4. [DefaultConfig] defaults
 package config
+
+// Mode names recognized by the pipeline.
+const (
+	// ModeBmad runs the full BMAD v6 cycle: create-story -> dev-story ->
+	// code-review (and, in Phase 2, commit-branch -> open-pr).
+	ModeBmad = "bmad"
+
+	// ModeBeads runs create-story -> sync-to-beads. Used when a project
+	// tracks work in Gastown Beads rather than PRs.
+	ModeBeads = "beads"
+)
 
 // Config represents the root configuration structure.
 //
@@ -27,9 +39,9 @@ type Config struct {
 	// Keys are workflow names (e.g., "create-story", "dev-story").
 	Workflows map[string]WorkflowConfig `mapstructure:"workflows"`
 
-	// FullCycle defines the steps for full lifecycle execution.
-	// Used by run, queue, and epic commands.
-	FullCycle FullCycleConfig `mapstructure:"full_cycle"`
+	// Modes maps mode names (e.g., "bmad", "beads") to their step sequences.
+	// Each mode declares which steps the pipeline runs in order.
+	Modes map[string]ModeConfig `mapstructure:"modes"`
 
 	// Claude contains Claude CLI binary configuration.
 	Claude ClaudeConfig `mapstructure:"claude"`
@@ -49,13 +61,14 @@ type WorkflowConfig struct {
 	PromptTemplate string `mapstructure:"prompt_template"`
 }
 
-// FullCycleConfig defines the steps for a full development cycle.
+// ModeConfig defines the ordered sequence of steps for a pipeline mode.
 //
-// This configuration is used by the run, queue, and epic commands
-// to determine the sequence of workflows to execute.
-type FullCycleConfig struct {
-	// Steps is the ordered list of workflow names to execute.
-	// Default: ["create-story", "dev-story", "code-review", "git-commit"]
+// Step names may reference either a Claude-driven workflow (with a template
+// in [Config.Workflows]) or a built-in native step such as "commit-branch"
+// or "open-pr". The pipeline resolves step names to executable functions via
+// its step registry.
+type ModeConfig struct {
+	// Steps is the ordered list of step names to execute for this mode.
 	Steps []string `mapstructure:"steps"`
 }
 
@@ -90,10 +103,11 @@ type OutputConfig struct {
 
 // DefaultConfig returns a new [Config] with sensible defaults.
 //
-// The defaults include standard workflow prompts for create-story, dev-story,
-// code-review, and git-commit workflows, as well as Claude CLI and output
-// formatting settings. These defaults work out of the box without any
-// configuration file.
+// The defaults include v6-aligned BMAD slash-command workflows (create-story,
+// dev-story, code-review) and two modes: "bmad" for the full BMAD cycle and
+// "beads" for the create-and-sync-to-Beads flow. Native steps such as
+// sync-to-beads, commit-branch, and open-pr are implemented in Go and do not
+// need prompt templates.
 func DefaultConfig() *Config {
 	return &Config{
 		Workflows: map[string]WorkflowConfig{
@@ -101,17 +115,19 @@ func DefaultConfig() *Config {
 				PromptTemplate: "/bmad-create-story - Create story: {{.StoryKey}}. Do not ask questions.",
 			},
 			"dev-story": {
-				PromptTemplate: "/bmad-dev-story - Work on story: {{.StoryKey}}. Complete all tasks. Run tests after each implementation. Do not ask clarifying questions - use best judgment based on existing patterns.",
+				PromptTemplate: "/bmad-dev-story - Implement story: {{.StoryKey}}. Do not ask questions.",
 			},
 			"code-review": {
-				PromptTemplate: "/bmad-code-review - Review story: {{.StoryKey}}. When presenting fix options, always choose to auto-fix all issues immediately. Do not wait for user input.",
-			},
-			"git-commit": {
-				PromptTemplate: "Commit all changes for story {{.StoryKey}} with a descriptive commit message following conventional commits format. Then push to the current branch. Do not ask questions.",
+				PromptTemplate: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree.",
 			},
 		},
-		FullCycle: FullCycleConfig{
-			Steps: []string{"create-story", "dev-story", "code-review", "git-commit"},
+		Modes: map[string]ModeConfig{
+			ModeBmad: {
+				Steps: []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr"},
+			},
+			ModeBeads: {
+				Steps: []string{"create-story", "sync-to-beads"},
+			},
 		},
 		Claude: ClaudeConfig{
 			OutputFormat: "stream-json",

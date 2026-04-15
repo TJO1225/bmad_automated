@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"story-factory/internal/status"
@@ -10,31 +11,86 @@ import (
 // stepFunc is the signature shared by all pipeline step methods.
 type stepFunc func(context.Context, string) (StepResult, error)
 
-// Run executes the full pipeline for a single story: create -> validate -> sync.
-//
-// Before running steps, it checks the story's sprint status. If the story is
-// not in backlog, it returns a StoryResult with Skipped: true.
-//
-// Each step is retried once on operational failure (StepResult.Success == false),
-// except sync, which is never retried (a retry could call bd create twice).
-// Infrastructure failures (error return) are never retried and bubble up immediately.
-// If a step fails after retry, the pipeline stops and returns the failure.
-func (p *Pipeline) Run(ctx context.Context, key string) (StoryResult, error) {
-	return p.runPipeline(ctx, key, p.StepCreate, p.StepValidate, p.stepSync)
+// namedStep pairs a step name with its executable function so the pipeline
+// can report which step ran, apply per-step retry policy, and resolve steps
+// from config by name.
+type namedStep struct {
+	Name string
+	Fn   stepFunc
 }
 
-// runPipeline implements the core pipeline logic with injectable step functions.
-// This enables testing the orchestration (sequencing, retry, status checking)
-// independently of step implementations.
-func (p *Pipeline) runPipeline(ctx context.Context, key string, create, validate, sync stepFunc) (StoryResult, error) {
+// nonRetryableSteps lists step names that must not be retried on operational
+// failure. Retrying these would cause duplicate side effects (e.g. two
+// bd-create calls, two commits, two PRs). code-review is also non-retryable
+// because the same diff reproduces the same findings.
+var nonRetryableSteps = map[string]struct{}{
+	stepNameSync:         {},
+	stepNameCommitBranch: {},
+	stepNameOpenPR:       {},
+	stepNameCodeReview:   {},
+}
+
+// codeReviewNeedsReviewReason is the sentinel [StepResult.Reason] returned by
+// StepCodeReview when the story was flipped back to in-progress. The pipeline
+// driver maps this onto [StoryResult.NeedsReview] rather than treating it as
+// an opaque failure.
+const codeReviewNeedsReviewReason = "needs-review"
+
+// stepRegistry returns the mapping of step names to Pipeline method functions.
+// Unknown names from a mode configuration produce a startup error in [Run].
+func (p *Pipeline) stepRegistry() map[string]stepFunc {
+	return map[string]stepFunc{
+		stepNameCreate:       p.StepCreate,
+		stepNameDevStory:     p.StepDevStory,
+		stepNameCodeReview:   p.StepCodeReview,
+		stepNameSync:         p.stepSync,
+		stepNameCommitBranch: p.StepCommitBranch,
+		stepNameOpenPR:       p.StepOpenPR,
+	}
+}
+
+// Run executes the configured pipeline mode's step sequence for a single story.
+//
+// The mode is looked up from [Pipeline.cfg].Modes; each named step is resolved
+// against [Pipeline.stepRegistry]. Before running any steps, the story's sprint
+// status is checked: stories already at "done" are skipped and returned with
+// [StoryResult.Skipped] set. Each step is retried at most once on operational
+// failure, except for steps in [nonRetryableSteps]. Infrastructure errors
+// (non-nil err) are never retried and bubble up immediately.
+func (p *Pipeline) Run(ctx context.Context, key string) (StoryResult, error) {
+	mode := p.mode
+	if mode == "" {
+		mode = "bmad"
+	}
+	stepNames, err := p.cfg.GetModeSteps(mode)
+	if err != nil {
+		return StoryResult{}, err
+	}
+	registry := p.stepRegistry()
+	steps := make([]namedStep, 0, len(stepNames))
+	for _, name := range stepNames {
+		fn, ok := registry[name]
+		if !ok {
+			return StoryResult{}, fmt.Errorf("mode %q references unknown step %q", mode, name)
+		}
+		steps = append(steps, namedStep{Name: name, Fn: fn})
+	}
+	return p.runPipeline(ctx, key, steps)
+}
+
+// runPipeline executes the given step slice sequentially, honoring retry
+// policy and capturing per-step outcomes on the resulting [StoryResult].
+//
+// Exported tests inject synthetic step slices to verify sequencing, retry,
+// and failure-propagation independent of real step implementations.
+func (p *Pipeline) runPipeline(ctx context.Context, key string, steps []namedStep) (StoryResult, error) {
 	start := time.Now()
 
-	// Check story status — skip if not backlog
 	entry, err := p.status.StoryByKey(key)
 	if err != nil {
 		return StoryResult{}, err
 	}
-	if entry.Status != status.StatusBacklog {
+	if entry.Status == status.StatusDone {
 		return StoryResult{Key: key, Skipped: true, Reason: string(entry.Status)}, nil
 	}
 
@@ -42,82 +98,57 @@ func (p *Pipeline) runPipeline(ctx context.Context, key string, create, validate
 		p.printer.Text("Starting pipeline for " + key)
 	}
 
-	// Step 1: Create
-	if p.printer != nil {
-		p.printer.StepStart(1, 3, "create")
-	}
-	createResult, err := p.runStep(ctx, key, create)
-	if err != nil {
-		return StoryResult{}, err
-	}
-	if p.printer != nil {
-		p.printer.StepEnd(createResult.Duration, createResult.Success)
-	}
-	if !createResult.Success {
-		return StoryResult{
-			Key:      key,
-			FailedAt: "create",
-			Reason:   createResult.Reason,
-			Duration: time.Since(start),
-		}, nil
+	executed := make([]string, 0, len(steps))
+	var result StoryResult
+	result.Key = key
+
+	total := len(steps)
+	for i, step := range steps {
+		if p.printer != nil {
+			p.printer.StepStart(i+1, total, step.Name)
+		}
+		stepResult, err := p.runStep(ctx, key, step)
+		if err != nil {
+			return StoryResult{}, err
+		}
+		if p.printer != nil {
+			p.printer.StepEnd(stepResult.Duration, stepResult.Success)
+		}
+		executed = append(executed, step.Name)
+
+		// Capture per-step data on the StoryResult for summary display.
+		if stepResult.BeadID != "" {
+			result.BeadID = stepResult.BeadID
+		}
+		if stepResult.PRURL != "" {
+			result.PRURL = stepResult.PRURL
+		}
+
+		if !stepResult.Success {
+			result.FailedAt = step.Name
+			result.Reason = stepResult.Reason
+			result.Duration = time.Since(start)
+			result.StepsExecuted = executed
+			if step.Name == "code-review" && stepResult.Reason == codeReviewNeedsReviewReason {
+				result.NeedsReview = true
+			}
+			return result, nil
+		}
 	}
 
-	// Step 2: Validate
-	if p.printer != nil {
-		p.printer.StepStart(2, 3, "validate")
-	}
-	validateResult, err := p.runStep(ctx, key, validate)
-	if err != nil {
-		return StoryResult{}, err
-	}
-	if p.printer != nil {
-		p.printer.StepEnd(validateResult.Duration, validateResult.Success)
-	}
-	if !validateResult.Success {
-		return StoryResult{
-			Key:      key,
-			FailedAt: "validate",
-			Reason:   validateResult.Reason,
-			Duration: time.Since(start),
-		}, nil
-	}
-
-	// Step 3: Sync
-	if p.printer != nil {
-		p.printer.StepStart(3, 3, "sync")
-	}
-	syncResult, err := p.runStep(ctx, key, sync)
-	if err != nil {
-		return StoryResult{}, err
-	}
-	if p.printer != nil {
-		p.printer.StepEnd(syncResult.Duration, syncResult.Success)
-	}
-	if !syncResult.Success {
-		return StoryResult{
-			Key:      key,
-			FailedAt: "sync",
-			Reason:   syncResult.Reason,
-			Duration: time.Since(start),
-		}, nil
-	}
-
-	return StoryResult{
-		Key:             key,
-		Success:         true,
-		Duration:        time.Since(start),
-		ValidationLoops: validateResult.ValidationLoops,
-		BeadID:          syncResult.BeadID,
-	}, nil
+	result.Success = true
+	result.Duration = time.Since(start)
+	result.StepsExecuted = executed
+	return result, nil
 }
 
-// runStep executes a step function with retry-once semantics.
+// runStep executes a step with retry-once semantics.
 //
-// On operational failure (StepResult.Success == false), the step is retried
-// exactly once, except for the sync step, which is never retried.
-// Infrastructure failures (error return) are never retried.
-func (p *Pipeline) runStep(ctx context.Context, key string, stepFn stepFunc) (StepResult, error) {
-	result, err := stepFn(ctx, key)
+// Operational failures (StepResult.Success == false) are retried exactly once
+// unless the step name is in [nonRetryableSteps]. Infrastructure errors
+// (non-nil err) are never retried.
+func (p *Pipeline) runStep(ctx context.Context, key string, step namedStep) (StepResult, error) {
+	result, err := step.Fn(ctx, key)
 	if err != nil {
 		return result, err
 	}
@@ -125,14 +156,13 @@ func (p *Pipeline) runStep(ctx context.Context, key string, stepFn stepFunc) (St
 		return result, nil
 	}
 
-	if result.Name == stepNameSync {
+	if _, nonRetryable := nonRetryableSteps[step.Name]; nonRetryable {
 		return result, nil
 	}
 
-	// Operational failure — retry once
 	if p.printer != nil {
-		p.printer.Text("Retrying " + result.Name + "...")
+		p.printer.Text("Retrying " + step.Name + "...")
 	}
-	result, err = stepFn(ctx, key)
+	result, err = step.Fn(ctx, key)
 	return result, err
 }

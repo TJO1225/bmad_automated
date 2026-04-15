@@ -3,6 +3,7 @@ package pipeline
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -25,11 +26,18 @@ func setupMinimalSprintStatus(t *testing.T, dir string) {
 	))
 }
 
-// setupBMADAgents creates the .claude/skills/bmad-create-story/ directory.
-func setupBMADAgents(t *testing.T, dir string) {
+// setupBMADAgents creates the .claude/skills/ directories required for tests.
+// By default it creates bmad-create-story, bmad-dev-story, and bmad-code-review
+// so BMAD-mode checks pass. Tests can pass a shorter list for negative cases.
+func setupBMADAgents(t *testing.T, dir string, skills ...string) {
 	t.Helper()
-	agentDir := filepath.Join(dir, ".claude", "skills", "bmad-create-story")
-	require.NoError(t, os.MkdirAll(agentDir, 0755))
+	if len(skills) == 0 {
+		skills = []string{"bmad-create-story", "bmad-dev-story", "bmad-code-review"}
+	}
+	for _, name := range skills {
+		agentDir := filepath.Join(dir, ".claude", "skills", name)
+		require.NoError(t, os.MkdirAll(agentDir, 0755))
+	}
 }
 
 // --- CheckBdCLI tests ---
@@ -108,35 +116,62 @@ func TestCheckSprintStatus(t *testing.T) {
 func TestCheckBMADAgents(t *testing.T) {
 	tests := []struct {
 		name            string
+		mode            string
 		setup           func(t *testing.T, dir string)
 		wantErr         bool
-		wantCheck       string
 		detailSubstring string
 	}{
 		{
-			name: "passes when bmad-create-story dir exists",
+			name: "bmad mode passes when all three skills exist",
+			mode: "bmad",
 			setup: func(t *testing.T, dir string) {
 				setupBMADAgents(t, dir)
 			},
 			wantErr: false,
 		},
 		{
-			name:            "fails when bmad-create-story dir missing",
+			name: "beads mode passes with only create-story",
+			mode: "beads",
+			setup: func(t *testing.T, dir string) {
+				setupBMADAgents(t, dir, "bmad-create-story")
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bmad mode fails when create-story missing",
+			mode:            "bmad",
 			setup:           func(t *testing.T, dir string) {},
 			wantErr:         true,
-			wantCheck:       "bmad-agents",
-			detailSubstring: "BMAD agent files not found",
+			detailSubstring: "bmad-create-story/ not found",
+		},
+		{
+			name: "bmad mode fails when dev-story missing",
+			mode: "bmad",
+			setup: func(t *testing.T, dir string) {
+				setupBMADAgents(t, dir, "bmad-create-story", "bmad-code-review")
+			},
+			wantErr:         true,
+			detailSubstring: "bmad-dev-story/ not found",
+		},
+		{
+			name: "bmad mode fails when code-review missing",
+			mode: "bmad",
+			setup: func(t *testing.T, dir string) {
+				setupBMADAgents(t, dir, "bmad-create-story", "bmad-dev-story")
+			},
+			wantErr:         true,
+			detailSubstring: "bmad-code-review/ not found",
 		},
 		{
 			name: "fails when bmad-create-story path is a file",
+			mode: "bmad",
 			setup: func(t *testing.T, dir string) {
 				p := filepath.Join(dir, ".claude", "skills", "bmad-create-story")
 				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0755))
 				require.NoError(t, os.WriteFile(p, []byte("x"), 0644))
 			},
 			wantErr:         true,
-			wantCheck:       "bmad-agents",
-			detailSubstring: "not a directory",
+			detailSubstring: "is not a directory",
 		},
 	}
 
@@ -145,13 +180,13 @@ func TestCheckBMADAgents(t *testing.T) {
 			dir := t.TempDir()
 			tt.setup(t, dir)
 
-			err := CheckBMADAgents(dir)
+			err := CheckBMADAgents(dir, tt.mode)
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.True(t, errors.Is(err, ErrPreconditionFailed))
 				var precondErr *PreconditionError
 				require.True(t, errors.As(err, &precondErr))
-				assert.Equal(t, tt.wantCheck, precondErr.Check)
+				assert.Equal(t, "bmad-agents", precondErr.Check)
 				assert.Contains(t, precondErr.Detail, tt.detailSubstring)
 			} else {
 				assert.NoError(t, err)
@@ -160,64 +195,138 @@ func TestCheckBMADAgents(t *testing.T) {
 	}
 }
 
+// --- CheckCleanWorkingTree tests ---
+
+func TestCheckCleanWorkingTree_CleanRepo(t *testing.T) {
+	dir := initTestGitRepo(t)
+	assert.NoError(t, CheckCleanWorkingTree(dir))
+}
+
+func TestCheckCleanWorkingTree_DirtyRepo(t *testing.T) {
+	dir := initTestGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("x"), 0644))
+
+	err := CheckCleanWorkingTree(dir)
+	require.Error(t, err)
+	var precondErr *PreconditionError
+	require.True(t, errors.As(err, &precondErr))
+	assert.Equal(t, "clean-tree", precondErr.Check)
+	assert.Contains(t, precondErr.Detail, "uncommitted changes")
+}
+
+func TestCheckCleanWorkingTree_NotARepo(t *testing.T) {
+	dir := t.TempDir()
+	err := CheckCleanWorkingTree(dir)
+	require.Error(t, err)
+	var precondErr *PreconditionError
+	require.True(t, errors.As(err, &precondErr))
+	assert.Equal(t, "clean-tree", precondErr.Check)
+	assert.Contains(t, precondErr.Detail, "not a git repository")
+}
+
 // --- CheckAll tests ---
 
-func TestCheckAll_SuccessWhenAllPresent(t *testing.T) {
-	dir := t.TempDir()
+func TestCheckAll_BmadMode_SuccessWhenAllPresent(t *testing.T) {
+	dir := initTestGitRepo(t)
 	setupMinimalSprintStatus(t, dir)
 	setupBMADAgents(t, dir)
+	commitAll(t, dir, "fixture setup")
 
-	// CheckAll also calls CheckBdCLI which depends on real PATH.
-	// If bd is not installed, we expect a bd-cli error first.
-	err := CheckAll(dir)
+	// BMAD mode requires gh on PATH and a clean git tree. If gh is missing
+	// (e.g. in sandboxed CI) we tolerate that — the point of this test is
+	// that sprint-status + agents + clean tree all pass and the failure,
+	// if any, is the gh CLI check.
+	err := CheckAll(dir, "bmad")
 	if err != nil {
 		var precondErr *PreconditionError
 		require.True(t, errors.As(err, &precondErr))
-		// Only bd-cli failure is acceptable here — the other two are set up.
+		assert.Equal(t, "gh-cli", precondErr.Check, "only gh-cli may legitimately fail in CI")
+	}
+}
+
+// initTestGitRepo initializes a real git repo in a temp dir so the
+// clean-working-tree precondition has a valid target to inspect.
+func initTestGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test User"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v failed: %s", args, out)
+	}
+	return dir
+}
+
+// commitAll stages all changes in dir and creates a commit with the given
+// message, so tests that set up fixture files after initTestGitRepo still
+// see a clean working tree.
+func commitAll(t *testing.T, dir, message string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"add", "-A"},
+		{"commit", "-m", message},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v failed: %s", args, out)
+	}
+}
+
+func TestCheckAll_BeadsMode_ChecksBdCLI(t *testing.T) {
+	dir := t.TempDir()
+	setupMinimalSprintStatus(t, dir)
+	setupBMADAgents(t, dir, "bmad-create-story")
+
+	err := CheckAll(dir, "beads")
+	if err != nil {
+		var precondErr *PreconditionError
+		require.True(t, errors.As(err, &precondErr))
+		// bd-cli is the only remaining check that might fail in CI.
 		assert.Equal(t, "bd-cli", precondErr.Check)
 	}
 }
 
 func TestCheckAll_FailsOnMissingSprintStatus(t *testing.T) {
-	dir := t.TempDir()
-	// Set up agents but NOT sprint-status
+	dir := initTestGitRepo(t)
 	setupBMADAgents(t, dir)
 
-	err := CheckAll(dir)
+	err := CheckAll(dir, "bmad")
 	require.Error(t, err)
 
 	var precondErr *PreconditionError
 	require.True(t, errors.As(err, &precondErr))
-	// Should fail on either bd-cli (if not installed) or sprint-status
-	assert.Contains(t, []string{"bd-cli", "sprint-status"}, precondErr.Check)
+	assert.Equal(t, "sprint-status", precondErr.Check)
 }
 
 func TestCheckAll_FailsOnMissingBMADAgents(t *testing.T) {
-	dir := t.TempDir()
-	// Set up sprint-status but NOT agents
+	dir := initTestGitRepo(t)
 	setupMinimalSprintStatus(t, dir)
 
-	err := CheckAll(dir)
+	err := CheckAll(dir, "bmad")
 	require.Error(t, err)
 
 	var precondErr *PreconditionError
 	require.True(t, errors.As(err, &precondErr))
-	// Should fail on either bd-cli (if not installed) or bmad-agents
-	assert.Contains(t, []string{"bd-cli", "bmad-agents"}, precondErr.Check)
+	assert.Equal(t, "bmad-agents", precondErr.Check)
 }
 
 func TestCheckAll_ReturnsFirstFailure(t *testing.T) {
-	// Empty dir — both sprint-status and agents are missing.
-	// First non-bd check to fail should be sprint-status (checked before agents).
-	dir := t.TempDir()
+	// Empty dir in bmad mode — sprint-status is checked first.
+	dir := initTestGitRepo(t)
 
-	err := CheckAll(dir)
+	err := CheckAll(dir, "bmad")
 	require.Error(t, err)
 
 	var precondErr *PreconditionError
 	require.True(t, errors.As(err, &precondErr))
-	// Should fail on bd-cli (first check) or sprint-status (second check)
-	assert.Contains(t, []string{"bd-cli", "sprint-status"}, precondErr.Check)
+	assert.Equal(t, "sprint-status", precondErr.Check)
 }
 
 // --- Error wrapping tests ---

@@ -75,6 +75,7 @@ func newQueueCommand(app *App) *cobra.Command {
 				pipeline.WithBeads(bdExecutor),
 				pipeline.WithDryRun(app.DryRun),
 				pipeline.WithVerbose(app.Verbose),
+				pipeline.WithMode(app.Mode),
 			)
 
 			// Execute queue

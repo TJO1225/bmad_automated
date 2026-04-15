@@ -60,6 +60,8 @@ func newBatchTestPipeline(t *testing.T, buf *bytes.Buffer, tmpDir string, reader
 }
 
 // mockRunMap creates a runFunc from maps of results and errors keyed by story key.
+// Successful results automatically get StepsExecuted populated so batch
+// accounting can attribute step counts correctly.
 func mockRunMap(results map[string]StoryResult, errs map[string]error) runFunc {
 	return func(_ context.Context, key string) (StoryResult, error) {
 		if errs != nil {
@@ -69,10 +71,17 @@ func mockRunMap(results map[string]StoryResult, errs map[string]error) runFunc {
 		}
 		if results != nil {
 			if r, ok := results[key]; ok {
+				if r.Success && len(r.StepsExecuted) == 0 {
+					r.StepsExecuted = []string{stepNameCreate, stepNameDevStory, stepNameCodeReview}
+				}
 				return r, nil
 			}
 		}
-		return StoryResult{Key: key, Success: true}, nil
+		return StoryResult{
+			Key:           key,
+			Success:       true,
+			StepsExecuted: []string{stepNameCreate, stepNameDevStory, stepNameCodeReview},
+		}, nil
 	}
 }
 
@@ -194,13 +203,13 @@ func TestRunEpic(t *testing.T) {
 
 			assert.Equal(t, tt.wantLen, len(result.Stories))
 			assert.Equal(t, tt.epicNum, result.EpicNum)
-			assert.Equal(t, tt.wantCreated, result.Created)
+			assert.Equal(t, tt.wantCreated, result.StepCounts[stepNameCreate])
 			assert.Equal(t, tt.wantFailed, result.Failed)
 			assert.Equal(t, tt.wantSkipped, result.Skipped)
 
 			if tt.wantCreated > 0 {
-				assert.Equal(t, tt.wantCreated, result.Validated)
-				assert.Equal(t, tt.wantCreated, result.Synced)
+				assert.Equal(t, tt.wantCreated, result.StepCounts[stepNameDevStory])
+				assert.Equal(t, tt.wantCreated, result.StepCounts[stepNameCodeReview])
 			}
 
 			if tt.wantLen > 0 {
@@ -408,13 +417,13 @@ func TestRunQueue(t *testing.T) {
 
 			assert.Equal(t, tt.wantLen, len(result.Stories))
 			assert.Equal(t, 0, result.EpicNum, "queue should have EpicNum=0")
-			assert.Equal(t, tt.wantCreated, result.Created)
+			assert.Equal(t, tt.wantCreated, result.StepCounts[stepNameCreate])
 			assert.Equal(t, tt.wantFailed, result.Failed)
 			assert.Equal(t, tt.wantSkipped, result.Skipped)
 
 			if tt.wantCreated > 0 {
-				assert.Equal(t, tt.wantCreated, result.Validated)
-				assert.Equal(t, tt.wantCreated, result.Synced)
+				assert.Equal(t, tt.wantCreated, result.StepCounts[stepNameDevStory])
+				assert.Equal(t, tt.wantCreated, result.StepCounts[stepNameCodeReview])
 			}
 
 			if tt.wantLen > 0 {
@@ -502,7 +511,11 @@ func TestRunQueue_SkipsStoriesNoLongerBacklog(t *testing.T) {
 				return StoryResult{}, err
 			}
 		}
-		return StoryResult{Key: key, Success: true}, nil
+		return StoryResult{
+			Key:           key,
+			Success:       true,
+			StepsExecuted: []string{stepNameCreate, stepNameDevStory, stepNameCodeReview},
+		}, nil
 	}
 
 	result, err := p.runQueue(context.Background(), mockRun)
@@ -512,7 +525,7 @@ func TestRunQueue_SkipsStoriesNoLongerBacklog(t *testing.T) {
 	require.Len(t, result.Stories, 2)
 	assert.True(t, result.Stories[0].Success)
 	assert.True(t, result.Stories[1].Skipped, "1-2-schema should be skipped after status change")
-	assert.Equal(t, 1, result.Created)
+	assert.Equal(t, 1, result.StepCounts[stepNameCreate])
 	assert.Equal(t, 1, result.Skipped)
 }
 

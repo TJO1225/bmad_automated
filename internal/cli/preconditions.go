@@ -18,7 +18,9 @@ func (app *App) RunPreconditions() error {
 		return fmt.Errorf("failed to determine working directory: %w", err)
 	}
 
-	check := pipeline.CheckAll
+	check := func(dir string) error {
+		return pipeline.CheckAll(dir, app.Mode)
+	}
 	if app.CheckPreconditions != nil {
 		check = app.CheckPreconditions
 	}

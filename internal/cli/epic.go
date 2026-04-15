@@ -83,6 +83,7 @@ func newEpicCommand(app *App) *cobra.Command {
 				pipeline.WithBeads(bdExecutor),
 				pipeline.WithDryRun(app.DryRun),
 				pipeline.WithVerbose(app.Verbose),
+				pipeline.WithMode(app.Mode),
 			)
 
 			// Execute epic batch
@@ -110,14 +111,16 @@ func mapStoryResults(stories []pipeline.StoryResult) []output.StoryResult {
 	out := make([]output.StoryResult, len(stories))
 	for i, sr := range stories {
 		out[i] = output.StoryResult{
-			Key:             sr.Key,
-			Success:         sr.Success,
-			Duration:        sr.Duration,
-			FailedAt:        sr.FailedAt,
-			Reason:          sr.Reason,
-			Skipped:         sr.Skipped,
-			ValidationLoops: sr.ValidationLoops,
-			BeadID:          sr.BeadID,
+			Key:           sr.Key,
+			Success:       sr.Success,
+			Duration:      sr.Duration,
+			FailedAt:      sr.FailedAt,
+			Reason:        sr.Reason,
+			Skipped:       sr.Skipped,
+			NeedsReview:   sr.NeedsReview,
+			BeadID:        sr.BeadID,
+			PRURL:         sr.PRURL,
+			StepsExecuted: sr.StepsExecuted,
 		}
 	}
 	return out
@@ -125,11 +128,14 @@ func mapStoryResults(stories []pipeline.StoryResult) []output.StoryResult {
 
 // mapBatchCounts converts a pipeline BatchResult's counts to output BatchCounts.
 func mapBatchCounts(result pipeline.BatchResult) output.BatchCounts {
+	stepCounts := result.StepCounts
+	if stepCounts == nil {
+		stepCounts = map[string]int{}
+	}
 	return output.BatchCounts{
-		Created:   result.Created,
-		Validated: result.Validated,
-		Synced:    result.Synced,
-		Failed:    result.Failed,
-		Skipped:   result.Skipped,
+		StepCounts:  stepCounts,
+		Failed:      result.Failed,
+		Skipped:     result.Skipped,
+		NeedsReview: result.NeedsReview,
 	}
 }

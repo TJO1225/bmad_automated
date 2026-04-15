@@ -167,7 +167,7 @@ func TestDefaultPrinter_CycleHeader(t *testing.T) {
 	p.CycleHeader("test-story")
 
 	output := buf.String()
-	assert.Contains(t, output, "BMAD Full Cycle")
+	assert.Contains(t, output, "Story Factory")
 	assert.Contains(t, output, "test-story")
 }
 
@@ -224,27 +224,31 @@ func TestDefaultPrinter_QueueStoryStart(t *testing.T) {
 	assert.Contains(t, output, "story-key")
 }
 
+// threeSteps returns a canonical bmad-mode step slice for tests.
+func threeSteps() []string {
+	return []string{"create-story", "dev-story", "code-review"}
+}
+
 func TestDefaultPrinter_QueueSummary_AllSuccess(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "1-1-foo", Success: true, Duration: 10 * time.Second, ValidationLoops: 1, BeadID: "abc123"},
-		{Key: "1-2-bar", Success: true, Duration: 20 * time.Second, ValidationLoops: 2, BeadID: "def456"},
+		{Key: "1-1-foo", Success: true, Duration: 10 * time.Second, StepsExecuted: threeSteps(), BeadID: "abc123"},
+		{Key: "1-2-bar", Success: true, Duration: 20 * time.Second, StepsExecuted: threeSteps(), BeadID: "def456"},
 	}
-	counts := BatchCounts{Created: 2, Validated: 2, Synced: 2}
+	counts := BatchCounts{StepCounts: map[string]int{"create-story": 2, "dev-story": 2, "code-review": 2}}
 
 	p.QueueSummary(results, counts, 30*time.Second)
 
 	out := buf.String()
 	assert.Contains(t, out, "BATCH COMPLETE")
-	assert.Contains(t, out, "loops:1")
+	assert.Contains(t, out, "steps:3")
 	assert.Contains(t, out, "bead:abc123")
-	assert.Contains(t, out, "loops:2")
 	assert.Contains(t, out, "bead:def456")
-	assert.Contains(t, out, "Created: 2")
-	assert.Contains(t, out, "Validated: 2")
-	assert.Contains(t, out, "Synced: 2")
+	assert.Contains(t, out, "create-story: 2")
+	assert.Contains(t, out, "dev-story: 2")
+	assert.Contains(t, out, "code-review: 2")
 	assert.Contains(t, out, "Failed: 0")
 }
 
@@ -253,24 +257,48 @@ func TestDefaultPrinter_QueueSummary_MixedBatch(t *testing.T) {
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "1-1-foo", Success: true, Duration: 12 * time.Second, ValidationLoops: 2, BeadID: "abc123"},
-		{Key: "1-2-bar", FailedAt: "validate", Reason: "timed out", Duration: 18 * time.Second},
+		{Key: "1-1-foo", Success: true, Duration: 12 * time.Second, StepsExecuted: threeSteps(), BeadID: "abc123"},
+		{Key: "1-2-bar", FailedAt: "code-review", Reason: "timed out", Duration: 18 * time.Second},
 		{Key: "1-3-baz", Skipped: true},
 	}
-	counts := BatchCounts{Created: 1, Validated: 1, Synced: 1, Failed: 1, Skipped: 1}
+	counts := BatchCounts{
+		StepCounts: map[string]int{"create-story": 2, "dev-story": 2, "code-review": 1},
+		Failed:     1,
+		Skipped:    1,
+	}
 
 	p.QueueSummary(results, counts, 30*time.Second)
 
 	out := buf.String()
 	assert.Contains(t, out, "BATCH FAILED")
-	assert.Contains(t, out, "loops:2")
+	assert.Contains(t, out, "steps:3")
 	assert.Contains(t, out, "bead:abc123")
-	assert.Contains(t, out, "validate")
+	assert.Contains(t, out, "code-review")
 	assert.Contains(t, out, "timed out")
 	assert.Contains(t, out, "skipped")
-	assert.Contains(t, out, "Created: 1")
+	assert.Contains(t, out, "create-story: 2")
 	assert.Contains(t, out, "Failed: 1")
 	assert.Contains(t, out, "Skip: 1")
+}
+
+func TestDefaultPrinter_QueueSummary_NeedsReviewSurface(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewPrinterWithWriter(&buf)
+
+	results := []StoryResult{
+		{Key: "1-1-foo", FailedAt: "code-review", Reason: "needs-review", NeedsReview: true, Duration: 5 * time.Second},
+	}
+	counts := BatchCounts{
+		StepCounts:  map[string]int{"create-story": 1, "dev-story": 1},
+		Failed:      1,
+		NeedsReview: 1,
+	}
+
+	p.QueueSummary(results, counts, 6*time.Second)
+
+	out := buf.String()
+	assert.Contains(t, out, "needs-review at code-review")
+	assert.Contains(t, out, "NeedsReview: 1")
 }
 
 func TestDefaultPrinter_QueueSummary_AllFailed(t *testing.T) {
@@ -278,8 +306,8 @@ func TestDefaultPrinter_QueueSummary_AllFailed(t *testing.T) {
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "1-1-foo", FailedAt: "create", Reason: "not found", Duration: 5 * time.Second},
-		{Key: "1-2-bar", FailedAt: "validate", Reason: "diverged", Duration: 8 * time.Second},
+		{Key: "1-1-foo", FailedAt: "create-story", Reason: "not found", Duration: 5 * time.Second},
+		{Key: "1-2-bar", FailedAt: "dev-story", Reason: "diverged", Duration: 8 * time.Second},
 	}
 	counts := BatchCounts{Failed: 2}
 
@@ -287,12 +315,11 @@ func TestDefaultPrinter_QueueSummary_AllFailed(t *testing.T) {
 
 	out := buf.String()
 	assert.Contains(t, out, "BATCH FAILED")
-	assert.Contains(t, out, "create")
+	assert.Contains(t, out, "create-story")
 	assert.Contains(t, out, "not found")
-	assert.Contains(t, out, "validate")
+	assert.Contains(t, out, "dev-story")
 	assert.Contains(t, out, "diverged")
 	assert.Contains(t, out, "Failed: 2")
-	assert.Contains(t, out, "Created: 0")
 }
 
 func TestDefaultPrinter_QueueSummary_AllSkipped(t *testing.T) {
@@ -311,7 +338,6 @@ func TestDefaultPrinter_QueueSummary_AllSkipped(t *testing.T) {
 	assert.Contains(t, out, "BATCH COMPLETE")
 	assert.Contains(t, out, "skipped")
 	assert.Contains(t, out, "Skip: 2")
-	assert.Contains(t, out, "Created: 0")
 }
 
 func TestDefaultPrinter_BatchSummary_EpicGrouped(t *testing.T) {
@@ -319,12 +345,15 @@ func TestDefaultPrinter_BatchSummary_EpicGrouped(t *testing.T) {
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "1-1-scaffold", Success: true, Duration: 8 * time.Second, ValidationLoops: 1, BeadID: "aaa"},
-		{Key: "1-2-schema", Success: true, Duration: 12 * time.Second, ValidationLoops: 1, BeadID: "bbb"},
-		{Key: "2-1-preconditions", Success: true, Duration: 10 * time.Second, ValidationLoops: 1, BeadID: "ccc"},
-		{Key: "2-2-creation", FailedAt: "create", Reason: "file not found", Duration: 15 * time.Second},
+		{Key: "1-1-scaffold", Success: true, Duration: 8 * time.Second, StepsExecuted: threeSteps(), BeadID: "aaa"},
+		{Key: "1-2-schema", Success: true, Duration: 12 * time.Second, StepsExecuted: threeSteps(), BeadID: "bbb"},
+		{Key: "2-1-preconditions", Success: true, Duration: 10 * time.Second, StepsExecuted: threeSteps(), BeadID: "ccc"},
+		{Key: "2-2-creation", FailedAt: "create-story", Reason: "file not found", Duration: 15 * time.Second},
 	}
-	counts := BatchCounts{Created: 3, Validated: 3, Synced: 3, Failed: 1}
+	counts := BatchCounts{
+		StepCounts: map[string]int{"create-story": 3, "dev-story": 3, "code-review": 3},
+		Failed:     1,
+	}
 
 	p.BatchSummary(results, counts, 45*time.Second)
 
@@ -338,7 +367,7 @@ func TestDefaultPrinter_BatchSummary_EpicGrouped(t *testing.T) {
 	assert.Contains(t, out, "file not found")
 	assert.Contains(t, out, "2 created, 0 failed")
 	assert.Contains(t, out, "1 created, 1 failed")
-	assert.Contains(t, out, "Created: 3")
+	assert.Contains(t, out, "create-story: 3")
 	assert.Contains(t, out, "Failed: 1")
 }
 
@@ -347,10 +376,10 @@ func TestDefaultPrinter_BatchSummary_AllSuccess(t *testing.T) {
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "1-1-a", Success: true, Duration: 5 * time.Second, ValidationLoops: 1, BeadID: "x1"},
-		{Key: "2-1-b", Success: true, Duration: 7 * time.Second, ValidationLoops: 1, BeadID: "x2"},
+		{Key: "1-1-a", Success: true, Duration: 5 * time.Second, StepsExecuted: threeSteps(), BeadID: "x1"},
+		{Key: "2-1-b", Success: true, Duration: 7 * time.Second, StepsExecuted: threeSteps(), BeadID: "x2"},
 	}
-	counts := BatchCounts{Created: 2, Validated: 2, Synced: 2}
+	counts := BatchCounts{StepCounts: map[string]int{"create-story": 2, "dev-story": 2, "code-review": 2}}
 
 	p.BatchSummary(results, counts, 12*time.Second)
 
@@ -358,7 +387,7 @@ func TestDefaultPrinter_BatchSummary_AllSuccess(t *testing.T) {
 	assert.Contains(t, out, "QUEUE COMPLETE")
 	assert.Contains(t, out, "Epic 1")
 	assert.Contains(t, out, "Epic 2")
-	assert.Contains(t, out, "Created: 2")
+	assert.Contains(t, out, "create-story: 2")
 }
 
 func TestDefaultPrinter_BatchSummary_WithSkipped(t *testing.T) {
@@ -366,11 +395,15 @@ func TestDefaultPrinter_BatchSummary_WithSkipped(t *testing.T) {
 	p := NewPrinterWithWriter(&buf)
 
 	results := []StoryResult{
-		{Key: "1-1-a", Success: true, Duration: 5 * time.Second, ValidationLoops: 1, BeadID: "x1"},
+		{Key: "1-1-a", Success: true, Duration: 5 * time.Second, StepsExecuted: threeSteps(), BeadID: "x1"},
 		{Key: "1-2-b", Skipped: true},
-		{Key: "2-1-c", FailedAt: "sync", Reason: "bd not found", Duration: 10 * time.Second},
+		{Key: "2-1-c", FailedAt: "code-review", Reason: "bd not found", Duration: 10 * time.Second},
 	}
-	counts := BatchCounts{Created: 1, Validated: 1, Synced: 1, Failed: 1, Skipped: 1}
+	counts := BatchCounts{
+		StepCounts: map[string]int{"create-story": 2, "dev-story": 2, "code-review": 1},
+		Failed:     1,
+		Skipped:    1,
+	}
 
 	p.BatchSummary(results, counts, 15*time.Second)
 
