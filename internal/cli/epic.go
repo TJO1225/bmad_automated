@@ -51,7 +51,7 @@ func newEpicCommand(app *App) *cobra.Command {
 
 			var storyKeys []string
 			for _, s := range allStories {
-				if s.Status != status.StatusDone {
+				if s.Status.IsProcessable() {
 					storyKeys = append(storyKeys, s.Key)
 				}
 			}

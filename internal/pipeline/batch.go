@@ -74,7 +74,7 @@ func (p *Pipeline) runEpic(ctx context.Context, epicNum int, run runFunc) (Batch
 
 	var pendingEntries []status.Entry
 	for _, e := range allStories {
-		if e.Status != status.StatusDone {
+		if e.Status.IsProcessable() {
 			pendingEntries = append(pendingEntries, e)
 		}
 	}
@@ -123,8 +123,8 @@ func (p *Pipeline) runBatch(ctx context.Context, stories []status.Entry, run run
 			result.Failed++
 			continue
 		}
-		if freshEntry.Status == status.StatusDone {
-			result.Stories = append(result.Stories, StoryResult{Key: entry.Key, Skipped: true, Reason: string(status.StatusDone)})
+		if !freshEntry.Status.IsProcessable() {
+			result.Stories = append(result.Stories, StoryResult{Key: entry.Key, Skipped: true, Reason: string(freshEntry.Status)})
 			result.Skipped++
 			continue
 		}

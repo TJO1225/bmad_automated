@@ -137,11 +137,10 @@ func (r *Reader) BacklogStories() ([]Entry, error) {
 	return result, nil
 }
 
-// UnfinishedStories returns every story entry whose status is not "done",
-// sorted by epic then story number. This is the set of work the pipeline
-// can still do: backlog, ready-for-dev, in-progress, and review statuses
-// are all processable (create-story, dev-story, and code-review steps skip
-// gracefully when their own state has already been reached).
+// UnfinishedStories returns every processable story entry
+// ([Status.IsProcessable] == true), sorted by epic then story number.
+// The set is: backlog, ready-for-dev, in-progress, review. Done and any
+// project-custom statuses (e.g. "deferred-post-mvp") are excluded.
 //
 // Used by the batch commands (queue, epic, dispatch) so stories that were
 // drafted ahead of time — sitting at ready-for-dev because someone ran
@@ -157,7 +156,7 @@ func (r *Reader) UnfinishedStories() ([]Entry, error) {
 		if e.Type != EntryTypeStory {
 			continue
 		}
-		if e.Status == StatusDone {
+		if !e.Status.IsProcessable() {
 			continue
 		}
 		result = append(result, e)

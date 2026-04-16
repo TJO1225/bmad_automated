@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"story-factory/internal/status"
 )
 
 // stepFunc is the signature shared by all pipeline step methods.
@@ -96,7 +94,9 @@ func (p *Pipeline) runPipeline(ctx context.Context, key string, steps []namedSte
 	if err != nil {
 		return StoryResult{}, err
 	}
-	if entry.Status == status.StatusDone {
+	// Skip if the story is done OR in a project-custom state
+	// (e.g. "deferred-post-mvp"). Only processable statuses flow through.
+	if !entry.Status.IsProcessable() {
 		return StoryResult{Key: key, Skipped: true, Reason: string(entry.Status)}, nil
 	}
 

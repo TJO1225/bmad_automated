@@ -50,6 +50,21 @@ const (
 	StatusDone Status = "done"
 )
 
+// IsProcessable reports whether a story with this status can advance
+// through the story-factory pipeline. True for backlog, ready-for-dev,
+// in-progress, and review. Done stories are already complete. Anything
+// else (project-custom statuses such as "deferred-post-mvp") is treated
+// as a hard skip — the pipeline will not try to run, branch, or open PRs
+// for those stories.
+func (s Status) IsProcessable() bool {
+	switch s {
+	case StatusBacklog, StatusReadyForDev, StatusInProgress, StatusReview:
+		return true
+	default:
+		return false
+	}
+}
+
 // IsValid reports whether the status is one of the known valid status values.
 // It returns true for backlog, ready-for-dev, in-progress, review, and done.
 func (s Status) IsValid() bool {
