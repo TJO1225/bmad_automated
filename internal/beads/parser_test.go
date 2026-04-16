@@ -37,24 +37,24 @@ func TestExtractTitle(t *testing.T) {
 			want:  "Later Heading",
 		},
 		{
-			name:    "missing heading",
+			name:    "no H1 heading at all",
 			input:   "## Not a Story Heading\n\nSome content",
-			wantErr: "no story title heading found",
+			wantErr: "no title heading found",
 		},
 		{
-			name:    "heading without colon",
-			input:   "# Story 1.2 Missing Colon\n",
-			wantErr: "no story title heading found",
+			name:  "heading without colon falls back to full H1",
+			input: "# Story 1.2 Missing Colon\n",
+			want:  "Story 1.2 Missing Colon",
 		},
 		{
 			name:    "empty content",
 			input:   "",
-			wantErr: "no story title heading found",
+			wantErr: "no title heading found",
 		},
 		{
-			name:    "heading with empty title",
-			input:   "# Story 1.2:   \n",
-			wantErr: "story title heading has empty title",
+			name:  "non-standard H1 falls back to raw heading text",
+			input: "# Epic 12 Phase 5a Cleanup\n\nSome body\n",
+			want:  "Epic 12 Phase 5a Cleanup",
 		},
 	}
 

@@ -26,22 +26,33 @@ import (
 	"strings"
 )
 
-// titleRegex matches "# Story X.Y: Title" headings and captures the title portion.
-var titleRegex = regexp.MustCompile(`(?m)^#\s+Story\s+\d+\.\d+:\s*(.+)$`)
+// titleRegex matches "# Story <id>: Title" headings with flexible ID formats
+// (e.g., "1.2", "12.5a", "12-5a") and captures the title portion after the colon.
+var titleRegex = regexp.MustCompile(`(?m)^#\s+Story\s+[\w.\-]+:\s*(.+)$`)
 
-// ExtractTitle parses a story markdown file and returns the title portion
-// from the "# Story X.Y: Title" heading. For example, given
-// "# Story 1.2: Database Schema", it returns "Database Schema".
+// fallbackTitleRegex matches any H1 heading as a last resort when the
+// structured "# Story X.Y: Title" pattern isn't found.
+var fallbackTitleRegex = regexp.MustCompile(`(?m)^#\s+(.+)$`)
+
+// ExtractTitle parses a story markdown file and returns the title portion.
+// It first tries the structured "# Story X.Y: Title" format, then falls
+// back to the raw text of the first H1 heading. Projects with non-standard
+// heading formats (e.g., "# Epic 12 Phase 5a — Workflow Cleanup") are
+// handled by the fallback.
 func ExtractTitle(content string) (string, error) {
-	matches := titleRegex.FindStringSubmatch(content)
-	if matches == nil {
-		return "", fmt.Errorf("no story title heading found (expected '# Story X.Y: Title')")
+	if matches := titleRegex.FindStringSubmatch(content); matches != nil {
+		title := strings.TrimSpace(matches[1])
+		if title != "" {
+			return title, nil
+		}
 	}
-	title := strings.TrimSpace(matches[1])
-	if title == "" {
-		return "", fmt.Errorf("story title heading has empty title")
+	if matches := fallbackTitleRegex.FindStringSubmatch(content); matches != nil {
+		title := strings.TrimSpace(matches[1])
+		if title != "" {
+			return title, nil
+		}
 	}
-	return title, nil
+	return "", fmt.Errorf("no title heading found in story file (expected '# Story X.Y: Title' or any '# Heading')")
 }
 
 // ExtractAcceptanceCriteria extracts the content of the "## Acceptance Criteria"
