@@ -245,6 +245,22 @@ func (p *Pipeline) StepCodeReview(ctx context.Context, key string) (StepResult, 
 			Reason:   codeReviewNeedsReviewReason,
 			Duration: time.Since(start),
 		}, nil
+	case status.StatusReview:
+		// BMAD's code-review skill completed without error (exit 0) but
+		// didn't update sprint-status — common in non-interactive claude -p
+		// mode. The review still ran; treat as success. The commit-branch
+		// step will include whatever changes the skill made (review
+		// artifacts, applied patches) and sprint-status stays at "review"
+		// until the PR merges. Callers that need status=done should flip
+		// it separately or accept that the PR itself is the review signal.
+		if p.printer != nil {
+			p.printer.Text(fmt.Sprintf("code-review %s: BMAD did not flip sprint-status (still %q); treating as success since Claude exited cleanly", key, postEntry.Status))
+		}
+		return StepResult{
+			Name:     stepNameCodeReview,
+			Success:  true,
+			Duration: time.Since(start),
+		}, nil
 	default:
 		return StepResult{
 			Name:     stepNameCodeReview,
