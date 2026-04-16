@@ -113,9 +113,15 @@ func (p *Pipeline) StepDevStory(ctx context.Context, key string) (StepResult, er
 	}
 	if postEntry.Status != status.StatusReview {
 		return StepResult{
-			Name:     stepNameDevStory,
-			Success:  false,
-			Reason:   fmt.Sprintf("dev story %s: status is %q after dev-story, expected review", key, postEntry.Status),
+			Name:    stepNameDevStory,
+			Success: false,
+			Reason: fmt.Sprintf(
+				"dev story %s: BMAD left status at %q (expected review). "+
+					"Check the story's Dev Agent Record / Completion Notes section for why — "+
+					"common causes: missing external dependency (DB, API, secret), "+
+					"unimplementable task requiring manual input, or Claude hit a tool error. "+
+					"Re-run after resolving to resume.",
+				key, postEntry.Status),
 			Duration: time.Since(start),
 		}, nil
 	}

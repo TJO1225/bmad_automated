@@ -115,10 +115,10 @@ func DefaultConfig() *Config {
 				PromptTemplate: "/bmad-create-story - Create story: {{.StoryKey}}. Do not ask questions.",
 			},
 			"dev-story": {
-				PromptTemplate: "/bmad-dev-story - Implement story: {{.StoryKey}}. Do not ask questions.",
+				PromptTemplate: "/bmad-dev-story - Implement story: {{.StoryKey}}. Complete every task in the story checklist, run tests as you go, and do not pause for confirmation. Use your best judgement based on existing patterns. Only stop when every task is checked and status is advanced to 'review'.",
 			},
 			"code-review": {
-				PromptTemplate: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree.",
+				PromptTemplate: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree. Auto-apply any patches you propose rather than asking for confirmation.",
 			},
 		},
 		Modes: map[string]ModeConfig{

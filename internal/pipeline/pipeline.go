@@ -20,14 +20,20 @@ type namedStep struct {
 }
 
 // nonRetryableSteps lists step names that must not be retried on operational
-// failure. Retrying these would cause duplicate side effects (e.g. two
-// bd-create calls, two commits, two PRs). code-review is also non-retryable
-// because the same diff reproduces the same findings.
+// failure. Retrying these either causes duplicate side effects (sync,
+// commit-branch, open-pr) or provides no value because the same input
+// reproduces the same result:
+//
+//   - code-review: the same diff produces the same findings
+//   - dev-story: if BMAD exited without advancing to "review", the story
+//     is either genuinely partial (awaiting manual input) or blocked on an
+//     external dependency; retrying doesn't resolve either case.
 var nonRetryableSteps = map[string]struct{}{
 	stepNameSync:         {},
 	stepNameCommitBranch: {},
 	stepNameOpenPR:       {},
 	stepNameCodeReview:   {},
+	stepNameDevStory:     {},
 }
 
 // codeReviewNeedsReviewReason is the sentinel [StepResult.Reason] returned by
