@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"story-factory/internal/beads"
-	"story-factory/internal/claude"
 	"story-factory/internal/config"
+	"story-factory/internal/executor"
 	"story-factory/internal/status"
 )
 
@@ -24,41 +24,93 @@ const (
 	stepNameSync         = "sync-to-beads"
 	stepNameCommitBranch = "commit-branch"
 	stepNameOpenPR       = "open-pr"
+	stepNameReviewPR     = "review-pr"
 
-	// DefaultTimeout is the maximum duration for a single Claude subprocess.
-	// Set high enough for complex skills that do research (create-story, dev-story).
-	DefaultTimeout = 15 * time.Minute
+	// DefaultTimeout is the maximum duration for a single LLM subprocess
+	// (create-story, dev-story, code-review, review-pr). Dev stories often run
+	// full frontend/backend test suites; 90m avoids spurious kills. Override with
+	// BMAD_PIPELINE_STEP_TIMEOUT or [WithLLMStepTimeout] for longer runs.
+	DefaultTimeout = 90 * time.Minute
 )
 
 // Pipeline orchestrates multi-step story processing workflows.
 //
 // Each step method (StepCreate, StepDevStory, StepCodeReview, stepSync) runs
 // one phase of the lifecycle. The Pipeline holds injected dependencies so
-// steps can invoke Claude, read configuration, and resolve file paths.
+// steps can invoke LLM backends, read configuration, and resolve file paths.
+//
+// The pipeline supports multiple backends via [WithExecutors]. Each step
+// resolves its executor through [Pipeline.resolveExecutor], which checks
+// (in order): workflow-level backend override, mode-level default backend,
+// then the pipeline's default executor.
 type Pipeline struct {
-	claude     claude.Executor
-	beads      beads.Executor
-	status     *status.Reader
-	printer    Printer
-	cfg        *config.Config
-	projectDir string
-	mode       string
-	dryRun     bool
-	verbose    bool
+	defaultExecutor executor.Executor
+	executors       map[string]executor.Executor
+	beads           beads.Executor
+	status          *status.Reader
+	printer         Printer
+	cfg             *config.Config
+	projectDir      string
+	mode            string
+	dryRun          bool
+	verbose         bool
+	// llmStepTimeout caps each LLM subprocess (create-story, dev-story, code-review, review-pr).
+	// Zero means use [DefaultTimeout]. Override via [WithLLMStepTimeout] or
+	// BMAD_PIPELINE_STEP_TIMEOUT (see [LLMStepTimeoutFromEnv]).
+	llmStepTimeout time.Duration
 }
 
 // NewPipeline creates a Pipeline with the given dependencies.
-func NewPipeline(executor claude.Executor, cfg *config.Config, projectDir string, opts ...PipelineOption) *Pipeline {
+//
+// The defaultExec is used for all LLM-driven steps unless overridden by
+// per-step backend configuration. Use [WithExecutors] to provide additional
+// named backends.
+func NewPipeline(defaultExec executor.Executor, cfg *config.Config, projectDir string, opts ...PipelineOption) *Pipeline {
 	p := &Pipeline{
-		claude:     executor,
-		cfg:        cfg,
-		projectDir: projectDir,
-		mode:       config.ModeBmad,
+		defaultExecutor: defaultExec,
+		executors:       make(map[string]executor.Executor),
+		cfg:             cfg,
+		projectDir:      projectDir,
+		mode:            config.ModeBmad,
 	}
 	for _, opt := range opts {
 		opt(p)
 	}
 	return p
+}
+
+// resolveExecutor returns the appropriate executor for the given step name.
+//
+// Resolution order:
+//  1. Workflow-level backend override (WorkflowConfig.Backend)
+//  2. Mode-level default backend (ModeConfig.DefaultBackend)
+//  3. Pipeline's default executor
+func (p *Pipeline) resolveExecutor(stepName string) executor.Executor {
+	// Check workflow-level backend override
+	if wf, ok := p.cfg.Workflows[stepName]; ok && wf.Backend != "" {
+		if exec, ok := p.executors[wf.Backend]; ok {
+			return exec
+		}
+	}
+	// Check mode-level default backend
+	if mode, ok := p.cfg.Modes[p.mode]; ok && mode.DefaultBackend != "" {
+		if exec, ok := p.executors[mode.DefaultBackend]; ok {
+			return exec
+		}
+	}
+	return p.defaultExecutor
+}
+
+// resolveBackendName returns the active backend name for a step.
+// Used to select per-backend prompt templates.
+func (p *Pipeline) resolveBackendName(stepName string) string {
+	if wf, ok := p.cfg.Workflows[stepName]; ok && wf.Backend != "" {
+		return wf.Backend
+	}
+	if mode, ok := p.cfg.Modes[p.mode]; ok && mode.DefaultBackend != "" {
+		return mode.DefaultBackend
+	}
+	return ""
 }
 
 // PipelineOption configures optional Pipeline dependencies.
@@ -79,6 +131,17 @@ func WithBeads(b beads.Executor) PipelineOption {
 	return func(p *Pipeline) { p.beads = b }
 }
 
+// WithExecutors sets named backend executors for per-step backend selection.
+// Keys are backend names (e.g., "claude", "gemini", "cursor") matching
+// [config.BackendConfig] keys.
+func WithExecutors(executors map[string]executor.Executor) PipelineOption {
+	return func(p *Pipeline) {
+		for k, v := range executors {
+			p.executors[k] = v
+		}
+	}
+}
+
 // WithDryRun enables dry-run mode.
 func WithDryRun(v bool) PipelineOption {
 	return func(p *Pipeline) { p.dryRun = v }
@@ -97,6 +160,25 @@ func WithMode(mode string) PipelineOption {
 			p.mode = mode
 		}
 	}
+}
+
+// WithLLMStepTimeout sets the maximum duration for a single Claude (or other
+// backend) subprocess in create-story, dev-story, code-review, and review-pr.
+// Values <= 0 are ignored so the default [DefaultTimeout] applies.
+func WithLLMStepTimeout(d time.Duration) PipelineOption {
+	return func(p *Pipeline) {
+		if d > 0 {
+			p.llmStepTimeout = d
+		}
+	}
+}
+
+// llmTimeout returns the effective per-step LLM timeout.
+func (p *Pipeline) llmTimeout() time.Duration {
+	if p.llmStepTimeout > 0 {
+		return p.llmStepTimeout
+	}
+	return DefaultTimeout
 }
 
 // StepCreate runs the story creation step: invoke Claude to create a story file
@@ -145,19 +227,20 @@ func (p *Pipeline) StepCreate(ctx context.Context, key string) (StepResult, erro
 		return StepResult{}, fmt.Errorf("create story %s: %w", key, err)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, p.llmTimeout())
 	defer cancel()
 
-	var handler claude.EventHandler
+	var handler executor.EventHandler
 	if p.verbose && p.printer != nil {
-		handler = func(event claude.Event) {
+		handler = func(event executor.Event) {
 			if event.IsText() {
 				p.printer.Text(event.Text)
 			}
 		}
 	}
 
-	exitCode, err := p.claude.ExecuteWithResult(timeoutCtx, prompt, handler)
+	exec := p.resolveExecutor(stepNameCreate)
+	exitCode, err := exec.ExecuteWithResult(timeoutCtx, prompt, handler)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded) || errors.Is(timeoutCtx.Err(), context.DeadlineExceeded):

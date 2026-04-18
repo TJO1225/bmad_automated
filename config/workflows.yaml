@@ -1,3 +1,15 @@
+backends:
+  claude:
+    binary_path: claude
+    output_format: stream-json
+  gemini:
+    binary_path: gemini
+    output_format: stream-json
+  cursor:
+    binary_path: cursor-agent
+    output_format: stream-json
+    api_key_env: CURSOR_API_KEY
+
 workflows:
   create-story:
     prompt_template: "/bmad-create-story - Create story: {{.StoryKey}}. Do not ask questions."
@@ -5,13 +17,24 @@ workflows:
     prompt_template: "/bmad-dev-story - Implement story: {{.StoryKey}}. Complete every task in the story checklist, run tests as you go, and do not pause for confirmation. Use your best judgement based on existing patterns. Only stop when every task is checked and status is advanced to 'review'."
   code-review:
     prompt_template: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree. Auto-apply any patches you propose rather than asking for confirmation."
+  review-pr:
+    prompt_template: "/code-review {{.PRURL}}"
+    backend: gemini
+    backend_prompts:
+      claude: "/code-review {{.PRURL}}"
+      gemini: "Review the pull request at {{.PRURL}}. Run `gh pr diff {{.PRURL}}` to examine the changes. Analyze for bugs, security issues, and code quality problems. If no blocking issues are found, run `gh pr review {{.PRURL}} --approve`. Keep your review concise and cite specific code lines."
+      cursor: "/code-review {{.PRURL}}"
 
 modes:
   bmad:
-    steps: [create-story, dev-story, code-review, commit-branch, open-pr]
+    default_backend: claude
+    steps: [create-story, dev-story, code-review, commit-branch, open-pr, review-pr]
   beads:
+    default_backend: claude
     steps: [create-story, sync-to-beads]
 
+# Legacy Claude config — kept for backward compatibility.
+# Prefer backends.claude for new configuration.
 claude:
   output_format: stream-json
   binary_path: claude

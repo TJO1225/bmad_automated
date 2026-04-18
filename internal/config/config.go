@@ -79,9 +79,25 @@ func (l *Loader) Load() (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
-	// Override Claude binary path from env if set
+	// Override binary paths from env if set
 	if binaryPath := os.Getenv("BMAD_CLAUDE_PATH"); binaryPath != "" {
 		cfg.Claude.BinaryPath = binaryPath
+		if b, ok := cfg.Backends[BackendClaude]; ok {
+			b.BinaryPath = binaryPath
+			cfg.Backends[BackendClaude] = b
+		}
+	}
+	if binaryPath := os.Getenv("BMAD_GEMINI_PATH"); binaryPath != "" {
+		if b, ok := cfg.Backends[BackendGemini]; ok {
+			b.BinaryPath = binaryPath
+			cfg.Backends[BackendGemini] = b
+		}
+	}
+	if binaryPath := os.Getenv("BMAD_CURSOR_PATH"); binaryPath != "" {
+		if b, ok := cfg.Backends[BackendCursor]; ok {
+			b.BinaryPath = binaryPath
+			cfg.Backends[BackendCursor] = b
+		}
 	}
 
 	return cfg, nil
@@ -118,12 +134,28 @@ func (l *Loader) LoadFromFile(path string) (*Config, error) {
 //
 // Returns an error if the workflow is not found or if template expansion fails.
 func (c *Config) GetPrompt(workflowName, storyKey string) (string, error) {
+	return c.GetPromptWithData(workflowName, "", PromptData{StoryKey: storyKey})
+}
+
+// GetPromptWithData returns the expanded prompt for a workflow, optionally
+// selecting a backend-specific prompt template override.
+//
+// If backendName is non-empty and the workflow has a BackendPrompts entry for
+// that backend, the override template is used instead of PromptTemplate.
+func (c *Config) GetPromptWithData(workflowName, backendName string, data PromptData) (string, error) {
 	workflow, ok := c.Workflows[workflowName]
 	if !ok {
 		return "", fmt.Errorf("unknown workflow: %s", workflowName)
 	}
 
-	return expandTemplate(workflow.PromptTemplate, PromptData{StoryKey: storyKey})
+	tmpl := workflow.PromptTemplate
+	if backendName != "" && workflow.BackendPrompts != nil {
+		if override, ok := workflow.BackendPrompts[backendName]; ok {
+			tmpl = override
+		}
+	}
+
+	return expandTemplate(tmpl, data)
 }
 
 // GetModeSteps returns the ordered step names for a pipeline mode.

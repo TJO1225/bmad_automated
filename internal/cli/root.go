@@ -15,13 +15,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"story-factory/internal/beads"
-	"story-factory/internal/claude"
 	"story-factory/internal/config"
+	"story-factory/internal/executor"
 	"story-factory/internal/output"
 	"story-factory/internal/status"
 )
@@ -67,8 +66,11 @@ type App struct {
 	// Config holds application configuration including workflow definitions.
 	Config *config.Config
 
-	// Executor runs Claude CLI as a subprocess and streams JSON events.
-	Executor claude.Executor
+	// DefaultExecutor is the primary LLM backend (typically Claude).
+	DefaultExecutor executor.Executor
+
+	// Executors maps backend names to their executors for per-step selection.
+	Executors map[string]executor.Executor
 
 	// Printer formats and displays output to the terminal.
 	Printer output.Printer
@@ -86,7 +88,7 @@ type App struct {
 	// DryRun shows planned operations without executing subprocesses.
 	DryRun bool
 
-	// Verbose streams Claude CLI output in real time.
+	// Verbose streams LLM CLI output in real time.
 	Verbose bool
 
 	// Mode selects the pipeline step sequence (e.g. "bmad" or "beads").
@@ -100,31 +102,29 @@ type App struct {
 // NewApp creates a new [App] with all production dependencies wired up.
 //
 // This constructor initializes:
-//   - A [claude.Executor] configured from cfg.Claude settings
+//   - Executors for each configured backend (Claude, Gemini, Cursor)
 //   - A [status.Reader] for sprint status management
 //   - An [output.Printer] for terminal output
+//
+// Note: These executors have no WorkingDir set. Per-command executors with
+// the correct working directory are built by [buildCommandExecutors] at
+// command execution time.
 //
 // For testing, construct [App] directly with mock dependencies instead.
 func NewApp(cfg *config.Config) *App {
 	printer := output.NewPrinter()
 
-	executor := claude.NewExecutor(claude.ExecutorConfig{
-		BinaryPath:   cfg.Claude.BinaryPath,
-		OutputFormat: cfg.Claude.OutputFormat,
-		GracePeriod:  5 * time.Second,
-		StderrHandler: func(line string) {
-			os.Stderr.WriteString("[stderr] " + line + "\n")
-		},
-	})
-
+	// Build executors without working dir (commands rebuild with correct dir)
+	defaultExec, executors := buildCommandExecutors(cfg, "")
 	statusReader := status.NewReader("")
 
 	return &App{
-		Config:        cfg,
-		Executor:      executor,
-		Printer:       printer,
-		StatusReader:  statusReader,
-		BeadsExecutor: beads.NewExecutor(),
+		Config:          cfg,
+		DefaultExecutor: defaultExec,
+		Executors:       executors,
+		Printer:         printer,
+		StatusReader:    statusReader,
+		BeadsExecutor:   beads.NewExecutor(),
 	}
 }
 
@@ -163,6 +163,7 @@ story creation, implementation, and code review.`,
 	rootCmd.AddCommand(newQueueCommand(app))
 	rootCmd.AddCommand(newDispatchCommand(app))
 	rootCmd.AddCommand(newCleanupCommand(app))
+	rootCmd.AddCommand(newReviewPRCommand(app))
 
 	return rootCmd
 }

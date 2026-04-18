@@ -50,6 +50,8 @@ cmd/story-factory/main.go
 
 Workflow prompts are in `config/workflows.yaml` using Go templates. Config loads via Viper with env var overrides (`BMAD_` prefix).
 
+Per-step LLM timeout (create-story, dev-story, code-review, review-pr) defaults to **90 minutes**. For even longer steps, set `BMAD_PIPELINE_STEP_TIMEOUT` to a Go duration string (for example `2h` or `180m`). Dispatch/run children inherit the environment of the shell that started `story-factory`.
+
 ### Claude CLI Integration
 
 The executor always passes `--enable-auto-mode` and `--output-format stream-json`. Each JSON line from stdout is parsed into `StreamEvent` structs, then converted to the higher-level `Event` type with convenience methods (`IsText()`, `IsToolUse()`, `IsToolResult()`).

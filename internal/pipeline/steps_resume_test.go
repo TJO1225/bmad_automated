@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"story-factory/internal/claude"
 	"story-factory/internal/config"
+	"story-factory/internal/executor"
 	"story-factory/internal/status"
 )
 
@@ -37,7 +37,7 @@ func TestStepCreate_ResumeSkipsWhenAlreadyPastBacklog(t *testing.T) {
 			key := "1-2-resume"
 			writeSprintStatus(t, dir, key, s)
 
-			mock := &claude.MockExecutor{ExitCode: 0}
+			mock := &executor.MockExecutor{ExitCode: 0}
 			p := NewPipeline(mock, config.DefaultConfig(), dir,
 				WithStatus(status.NewReader(dir)),
 			)
@@ -58,7 +58,7 @@ func TestStepDevStory_ResumeSkipsWhenPastReview(t *testing.T) {
 			key := "1-2-resume"
 			writeSprintStatus(t, dir, key, s)
 
-			mock := &claude.MockExecutor{ExitCode: 0}
+			mock := &executor.MockExecutor{ExitCode: 0}
 			p := NewPipeline(mock, config.DefaultConfig(), dir,
 				WithStatus(status.NewReader(dir)),
 			)
@@ -77,7 +77,7 @@ func TestStepDevStory_FailsWhenStillBacklog(t *testing.T) {
 	key := "1-2-not-ready"
 	writeSprintStatus(t, dir, key, "backlog")
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -94,7 +94,7 @@ func TestStepCodeReview_ResumeSkipsWhenDone(t *testing.T) {
 	key := "1-2-resume"
 	writeSprintStatus(t, dir, key, "done")
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -111,7 +111,7 @@ func TestStepCodeReview_FailsWhenNotYetReview(t *testing.T) {
 	key := "1-2-not-ready"
 	writeSprintStatus(t, dir, key, "in-progress")
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)

@@ -30,6 +30,13 @@ const (
 	ModeBeads = "beads"
 )
 
+// Backend name constants used as keys in [Config.Backends].
+const (
+	BackendClaude = "claude"
+	BackendGemini = "gemini"
+	BackendCursor = "cursor"
+)
+
 // Config represents the root configuration structure.
 //
 // This is the main configuration container loaded by [Loader] and used throughout
@@ -43,7 +50,13 @@ type Config struct {
 	// Each mode declares which steps the pipeline runs in order.
 	Modes map[string]ModeConfig `mapstructure:"modes"`
 
+	// Backends maps backend names to their configurations.
+	// Keys are backend names (e.g., "claude", "gemini", "cursor").
+	// If empty, a single "claude" backend is derived from [ClaudeConfig].
+	Backends map[string]BackendConfig `mapstructure:"backends"`
+
 	// Claude contains Claude CLI binary configuration.
+	// Kept for backward compatibility; prefer [Backends] for new code.
 	Claude ClaudeConfig `mapstructure:"claude"`
 
 	// Output contains terminal output formatting configuration.
@@ -53,23 +66,56 @@ type Config struct {
 // WorkflowConfig represents a single workflow configuration.
 //
 // Each workflow has a prompt template that is expanded with story data
-// using Go's text/template package.
+// using Go's text/template package. Optionally, a workflow can specify
+// which backend to use and per-backend prompt overrides.
 type WorkflowConfig struct {
 	// PromptTemplate is the Go template string for the workflow prompt.
 	// Use {{.StoryKey}} to reference the story key.
 	// Example: "Work on story: {{.StoryKey}}"
 	PromptTemplate string `mapstructure:"prompt_template"`
+
+	// Backend optionally selects which backend runs this workflow step.
+	// If empty, the mode's DefaultBackend or the pipeline's default is used.
+	Backend string `mapstructure:"backend"`
+
+	// BackendPrompts optionally provides per-backend prompt template overrides.
+	// Key is the backend name (e.g., "gemini"). When the active backend has
+	// an entry here, it is used instead of PromptTemplate.
+	BackendPrompts map[string]string `mapstructure:"backend_prompts"`
 }
 
 // ModeConfig defines the ordered sequence of steps for a pipeline mode.
 //
-// Step names may reference either a Claude-driven workflow (with a template
+// Step names may reference either an LLM-driven workflow (with a template
 // in [Config.Workflows]) or a built-in native step such as "commit-branch"
 // or "open-pr". The pipeline resolves step names to executable functions via
 // its step registry.
 type ModeConfig struct {
 	// Steps is the ordered list of step names to execute for this mode.
 	Steps []string `mapstructure:"steps"`
+
+	// DefaultBackend selects which backend to use for steps that don't
+	// specify their own. If empty, the pipeline's default executor is used.
+	DefaultBackend string `mapstructure:"default_backend"`
+}
+
+// BackendConfig contains configuration for an LLM CLI backend.
+//
+// Each backend (Claude, Gemini, Cursor Agent) has its own binary path,
+// output format, and optional authentication settings.
+type BackendConfig struct {
+	// BinaryPath is the path to the CLI binary.
+	// Example: "claude", "gemini", "cursor-agent"
+	BinaryPath string `mapstructure:"binary_path"`
+
+	// OutputFormat is the output format flag value.
+	// Typically "stream-json" for all backends.
+	OutputFormat string `mapstructure:"output_format"`
+
+	// APIKeyEnv is the name of the environment variable containing an API key.
+	// Used by backends that require authentication (e.g., Cursor Agent uses CURSOR_API_KEY).
+	// If empty, no API key is passed.
+	APIKeyEnv string `mapstructure:"api_key_env"`
 }
 
 // ClaudeConfig contains Claude CLI configuration.
@@ -120,14 +166,30 @@ func DefaultConfig() *Config {
 			"code-review": {
 				PromptTemplate: "/bmad-code-review - Review story: {{.StoryKey}}. Review uncommitted changes in the working tree. Auto-apply any patches you propose rather than asking for confirmation.",
 			},
+			"review-pr": {
+				PromptTemplate: "/code-review {{.PRURL}}",
+				Backend:        BackendGemini,
+				BackendPrompts: map[string]string{
+					BackendClaude: "/code-review {{.PRURL}}",
+					BackendGemini: "Review the pull request at {{.PRURL}}. Run `gh pr diff {{.PRURL}}` to examine the changes. Analyze for bugs, security issues, and code quality problems. If no blocking issues are found, run `gh pr review {{.PRURL}} --approve`. Keep your review concise and cite specific code lines.",
+					BackendCursor: "/code-review {{.PRURL}}",
+				},
+			},
 		},
 		Modes: map[string]ModeConfig{
 			ModeBmad: {
-				Steps: []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr"},
+				Steps:          []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr", "review-pr"},
+				DefaultBackend: BackendClaude,
 			},
 			ModeBeads: {
-				Steps: []string{"create-story", "sync-to-beads"},
+				Steps:          []string{"create-story", "sync-to-beads"},
+				DefaultBackend: BackendClaude,
 			},
+		},
+		Backends: map[string]BackendConfig{
+			BackendClaude: {BinaryPath: "claude", OutputFormat: "stream-json"},
+			BackendGemini: {BinaryPath: "gemini", OutputFormat: "stream-json"},
+			BackendCursor: {BinaryPath: "cursor-agent", OutputFormat: "stream-json", APIKeyEnv: "CURSOR_API_KEY"},
 		},
 		Claude: ClaudeConfig{
 			OutputFormat: "stream-json",
@@ -148,4 +210,8 @@ type PromptData struct {
 	// StoryKey is the identifier of the story being processed.
 	// Access in templates with {{.StoryKey}}.
 	StoryKey string
+
+	// PRURL is the pull request URL, populated for review-pr steps.
+	// Access in templates with {{.PRURL}}.
+	PRURL string
 }

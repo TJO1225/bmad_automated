@@ -2,12 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"story-factory/internal/beads"
-	"story-factory/internal/claude"
 	"story-factory/internal/pipeline"
 	"story-factory/internal/status"
 )
@@ -34,28 +32,25 @@ func newRunCommand(app *App) *cobra.Command {
 				return fmt.Errorf("failed to determine working directory: %w", err)
 			}
 
-			// Construct executor with project working directory
-			executor := claude.NewExecutor(claude.ExecutorConfig{
-				BinaryPath:   app.Config.Claude.BinaryPath,
-				OutputFormat: app.Config.Claude.OutputFormat,
-				WorkingDir:   projectDir,
-				GracePeriod:  5 * time.Second,
-			})
+			// Construct executors with project working directory
+			defaultExec, executors := buildCommandExecutors(app.Config, projectDir)
 
 			// Construct beads executor with project working directory
 			bdExecutor := &beads.DefaultExecutor{WorkingDir: projectDir}
 
 			// Construct pipeline with all dependencies
 			p := pipeline.NewPipeline(
-				executor,
+				defaultExec,
 				app.Config,
 				projectDir,
+				pipeline.WithLLMStepTimeout(pipeline.LLMStepTimeoutFromEnv()),
 				pipeline.WithStatus(status.NewReader(projectDir)),
 				pipeline.WithPrinter(app.Printer),
 				pipeline.WithBeads(bdExecutor),
 				pipeline.WithDryRun(app.DryRun),
 				pipeline.WithVerbose(app.Verbose),
 				pipeline.WithMode(app.Mode),
+				pipeline.WithExecutors(executors),
 			)
 
 			// Execute full pipeline

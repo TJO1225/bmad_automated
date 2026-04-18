@@ -20,7 +20,7 @@ func TestDefaultConfig(t *testing.T) {
 	// Check modes exist with expected step sequences
 	assert.Contains(t, cfg.Modes, ModeBmad)
 	assert.Contains(t, cfg.Modes, ModeBeads)
-	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr"}, cfg.Modes[ModeBmad].Steps)
+	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr", "review-pr"}, cfg.Modes[ModeBmad].Steps)
 	assert.Equal(t, []string{"create-story", "sync-to-beads"}, cfg.Modes[ModeBeads].Steps)
 
 	// Check defaults
@@ -80,7 +80,7 @@ func TestConfig_GetModeSteps(t *testing.T) {
 
 	bmad, err := cfg.GetModeSteps(ModeBmad)
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr"}, bmad)
+	assert.Equal(t, []string{"create-story", "dev-story", "code-review", "commit-branch", "open-pr", "review-pr"}, bmad)
 
 	beads, err := cfg.GetModeSteps(ModeBeads)
 	assert.NoError(t, err)
@@ -349,4 +349,101 @@ func TestDefaultConfig_WorkflowTemplates(t *testing.T) {
 func TestPromptData_StoryKey(t *testing.T) {
 	data := PromptData{StoryKey: "ABC-123"}
 	assert.Equal(t, "ABC-123", data.StoryKey)
+}
+
+func TestDefaultConfig_Backends(t *testing.T) {
+	cfg := DefaultConfig()
+
+	assert.Contains(t, cfg.Backends, BackendClaude)
+	assert.Contains(t, cfg.Backends, BackendGemini)
+	assert.Contains(t, cfg.Backends, BackendCursor)
+
+	assert.Equal(t, "claude", cfg.Backends[BackendClaude].BinaryPath)
+	assert.Equal(t, "gemini", cfg.Backends[BackendGemini].BinaryPath)
+	assert.Equal(t, "cursor-agent", cfg.Backends[BackendCursor].BinaryPath)
+	assert.Equal(t, "CURSOR_API_KEY", cfg.Backends[BackendCursor].APIKeyEnv)
+}
+
+func TestDefaultConfig_ModeDefaultBackend(t *testing.T) {
+	cfg := DefaultConfig()
+
+	assert.Equal(t, BackendClaude, cfg.Modes[ModeBmad].DefaultBackend)
+	assert.Equal(t, BackendClaude, cfg.Modes[ModeBeads].DefaultBackend)
+}
+
+func TestGetPromptWithData_FallsBackToDefault(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// No backend prompts, should use default template
+	prompt, err := cfg.GetPromptWithData("create-story", "gemini", PromptData{StoryKey: "test-key"})
+	require.NoError(t, err)
+	assert.Contains(t, prompt, "test-key")
+}
+
+func TestGetPromptWithData_UsesBackendOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Workflows["review-pr"] = WorkflowConfig{
+		PromptTemplate: "/code-review {{.PRURL}}",
+		BackendPrompts: map[string]string{
+			"gemini": "Review PR at {{.PRURL}} using gh pr diff. Story: {{.StoryKey}}",
+		},
+	}
+
+	// Gemini backend should use override
+	prompt, err := cfg.GetPromptWithData("review-pr", "gemini", PromptData{
+		StoryKey: "1-2-test",
+		PRURL:    "https://github.com/org/repo/pull/42",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, prompt, "gh pr diff")
+	assert.Contains(t, prompt, "https://github.com/org/repo/pull/42")
+	assert.Contains(t, prompt, "1-2-test")
+
+	// Claude backend should fall back to default template
+	prompt, err = cfg.GetPromptWithData("review-pr", "claude", PromptData{
+		PRURL: "https://github.com/org/repo/pull/42",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, prompt, "/code-review")
+	assert.Contains(t, prompt, "https://github.com/org/repo/pull/42")
+}
+
+func TestGetPromptWithData_EmptyBackendUsesDefault(t *testing.T) {
+	cfg := DefaultConfig()
+
+	prompt, err := cfg.GetPromptWithData("create-story", "", PromptData{StoryKey: "key"})
+	require.NoError(t, err)
+	assert.Contains(t, prompt, "key")
+}
+
+func TestGetPromptWithData_PRURL(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Workflows["review-pr"] = WorkflowConfig{
+		PromptTemplate: "Review {{.PRURL}} for story {{.StoryKey}}",
+	}
+
+	prompt, err := cfg.GetPromptWithData("review-pr", "", PromptData{
+		StoryKey: "1-2-test",
+		PRURL:    "https://github.com/org/repo/pull/99",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Review https://github.com/org/repo/pull/99 for story 1-2-test", prompt)
+}
+
+func TestLoader_Load_GeminiEnvOverride(t *testing.T) {
+	os.Setenv("BMAD_GEMINI_PATH", "/custom/gemini")
+	defer os.Unsetenv("BMAD_GEMINI_PATH")
+
+	// Ensure no config file
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(originalWd)
+	os.Unsetenv("BMAD_CONFIG_PATH")
+	os.Unsetenv("BMAD_CLAUDE_PATH")
+
+	loader := NewLoader()
+	cfg, err := loader.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "/custom/gemini", cfg.Backends[BackendGemini].BinaryPath)
 }

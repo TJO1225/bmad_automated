@@ -2,7 +2,6 @@ package claude
 
 import (
 	"context"
-	"io"
 	"testing"
 	"time"
 
@@ -206,27 +205,9 @@ func TestMockExecutor_MultiplePrompts(t *testing.T) {
 	assert.Equal(t, []string{"prompt 1", "prompt 2", "prompt 3"}, mock.RecordedPrompts)
 }
 
-// mockParser implements Parser for testing
-type mockParser struct {
-	events []Event
-}
-
-func (m *mockParser) Parse(reader io.Reader) <-chan Event {
-	ch := make(chan Event)
-	go func() {
-		defer close(ch)
-		for _, e := range m.events {
-			ch <- e
-		}
-	}()
-	return ch
-}
-
 func TestNewExecutor_UsesProvidedParser(t *testing.T) {
-	customEvents := []Event{
-		{Type: EventTypeSystem, SessionStarted: true},
-	}
-	customParser := &mockParser{events: customEvents}
+	customParser := NewParser()
+	customParser.BufferSize = 1024 // small buffer for testing
 
 	exec := NewExecutor(ExecutorConfig{
 		Parser: customParser,

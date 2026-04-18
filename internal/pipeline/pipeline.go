@@ -30,6 +30,7 @@ var nonRetryableSteps = map[string]struct{}{
 	stepNameSync:         {},
 	stepNameCommitBranch: {},
 	stepNameOpenPR:       {},
+	stepNameReviewPR:     {},
 	stepNameCodeReview:   {},
 	stepNameDevStory:     {},
 }
@@ -50,6 +51,7 @@ func (p *Pipeline) stepRegistry() map[string]stepFunc {
 		stepNameSync:         p.stepSync,
 		stepNameCommitBranch: p.StepCommitBranch,
 		stepNameOpenPR:       p.StepOpenPR,
+		stepNameReviewPR:     p.StepReviewPR,
 	}
 }
 

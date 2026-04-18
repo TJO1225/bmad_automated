@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"story-factory/internal/config"
 )
+
+// githubPRMergeURL matches https://github.com/OWNER/REPO/pull/N (optional trailing slash only).
+var githubPRMergeURL = regexp.MustCompile(`(?i)^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)/?$`)
 
 // StepReviewPR runs a code review on an existing PR using a (typically
 // different) LLM backend, then auto-merges on a clean review.
@@ -149,15 +154,32 @@ func (p *Pipeline) StepReviewPR(ctx context.Context, key string) (StepResult, er
 	}, nil
 }
 
-// mergePR squash-merges a pull request on GitHub. We intentionally omit
-// gh's --delete-branch: it updates local git state and can fail with
-// "main is already used by worktree" when story-factory runs from a linked
-// worktree while the primary clone has main checked out.
+// parseGitHubPRForMerge returns ("owner/repo", prNumber, true) for a standard
+// github.com PR URL. Used so gh can be invoked with --repo and no local checkout.
+func parseGitHubPRForMerge(raw string) (ownerRepo string, prNumber string, ok bool) {
+	m := githubPRMergeURL.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1] + "/" + m[2], m[3], true
+}
+
+// mergePR squash-merges a pull request on GitHub.
+//
+// We omit gh's --delete-branch (local branch delete can touch default-branch
+// refs). We also run gh with Dir=os.TempDir() and, for github.com URLs,
+// "gh pr merge <num> --repo owner/repo" so gh does not run git in the story
+// worktree's linked gitdir — that avoids "fatal: 'main' is already used by
+// worktree" when main is checked out in the primary clone.
 func (p *Pipeline) mergePR(ctx context.Context, prURL string) error {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", prURL,
-		"--squash",
-	)
-	cmd.Dir = p.projectDir
+	url := strings.TrimSpace(prURL)
+	var cmd *exec.Cmd
+	if ownerRepo, num, ok := parseGitHubPRForMerge(url); ok {
+		cmd = exec.CommandContext(ctx, "gh", "pr", "merge", num, "--squash", "--repo", ownerRepo)
+	} else {
+		cmd = exec.CommandContext(ctx, "gh", "pr", "merge", url, "--squash")
+	}
+	cmd.Dir = os.TempDir()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

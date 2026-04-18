@@ -11,6 +11,7 @@ Comprehensive documentation for the `bmad-automate` CLI tool.
 | [User Guide](USER_GUIDE.md)        | Getting started, installation, usage patterns |
 | [CLI Reference](CLI_REFERENCE.md)  | Complete command reference with examples      |
 | [CLI Cookbook](examples/README.md) | Recipe-style CLI examples                     |
+| [Dispatch & PR handoff](DISPATCH_AND_PR_HANDOFF.md) | Parallel `dispatch`, tmux, worktrees, PR triage, resume checklist |
 
 ### For Developers
 

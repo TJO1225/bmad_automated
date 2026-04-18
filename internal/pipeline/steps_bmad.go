@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"story-factory/internal/claude"
+	"story-factory/internal/executor"
 	"story-factory/internal/status"
 )
 
@@ -80,11 +80,12 @@ func (p *Pipeline) StepDevStory(ctx context.Context, key string) (StepResult, er
 		return StepResult{}, fmt.Errorf("dev story %s: %w", key, err)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, p.llmTimeout())
 	defer cancel()
 
 	handler := p.verboseHandler()
-	exitCode, err := p.claude.ExecuteWithResult(timeoutCtx, prompt, handler)
+	exec := p.resolveExecutor(stepNameDevStory)
+	exitCode, err := exec.ExecuteWithResult(timeoutCtx, prompt, handler)
 	if err != nil {
 		if reason := classifyContextErr(err, timeoutCtx, "dev story "+key); reason != "" {
 			return StepResult{
@@ -97,6 +98,24 @@ func (p *Pipeline) StepDevStory(ctx context.Context, key string) (StepResult, er
 		return StepResult{}, err
 	}
 	if exitCode != 0 {
+		if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+			return StepResult{
+				Name:    stepNameDevStory,
+				Success: false,
+				Reason: fmt.Sprintf(
+					"dev story %s: timed out after %s (Claude subprocess killed; typical when dev-story runs tests — set %s=e.g.90m or 2h)",
+					key, p.llmTimeout(), envLLMStepTimeout),
+				Duration: time.Since(start),
+			}, nil
+		}
+		if errors.Is(timeoutCtx.Err(), context.Canceled) {
+			return StepResult{
+				Name:     stepNameDevStory,
+				Success:  false,
+				Reason:   "dev story " + key + ": canceled",
+				Duration: time.Since(start),
+			}, nil
+		}
 		return StepResult{
 			Name:     stepNameDevStory,
 			Success:  false,
@@ -200,11 +219,12 @@ func (p *Pipeline) StepCodeReview(ctx context.Context, key string) (StepResult, 
 		return StepResult{}, fmt.Errorf("code-review %s: %w", key, err)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, DefaultTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, p.llmTimeout())
 	defer cancel()
 
 	handler := p.verboseHandler()
-	exitCode, err := p.claude.ExecuteWithResult(timeoutCtx, prompt, handler)
+	exec := p.resolveExecutor(stepNameCodeReview)
+	exitCode, err := exec.ExecuteWithResult(timeoutCtx, prompt, handler)
 	if err != nil {
 		if reason := classifyContextErr(err, timeoutCtx, "code-review "+key); reason != "" {
 			return StepResult{
@@ -217,6 +237,16 @@ func (p *Pipeline) StepCodeReview(ctx context.Context, key string) (StepResult, 
 		return StepResult{}, err
 	}
 	if exitCode != 0 {
+		if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+			return StepResult{
+				Name:    stepNameCodeReview,
+				Success: false,
+				Reason: fmt.Sprintf(
+					"code-review %s: timed out after %s (set %s=e.g.90m)",
+					key, p.llmTimeout(), envLLMStepTimeout),
+				Duration: time.Since(start),
+			}, nil
+		}
 		return StepResult{
 			Name:     stepNameCodeReview,
 			Success:  false,
@@ -275,11 +305,11 @@ func (p *Pipeline) StepCodeReview(ctx context.Context, key string) (StepResult, 
 // the pipeline's printer when verbose mode is enabled. Returns nil if either
 // verbose is off or no printer is configured, in which case the executor runs
 // silently.
-func (p *Pipeline) verboseHandler() claude.EventHandler {
+func (p *Pipeline) verboseHandler() executor.EventHandler {
 	if !p.verbose || p.printer == nil {
 		return nil
 	}
-	return func(event claude.Event) {
+	return func(event executor.Event) {
 		if event.IsText() {
 			p.printer.Text(event.Text)
 		}

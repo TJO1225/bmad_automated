@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"story-factory/internal/beads"
-	"story-factory/internal/claude"
 	"story-factory/internal/config"
+	"story-factory/internal/executor"
 	"story-factory/internal/status"
 )
 
@@ -25,22 +25,22 @@ func testConfig() *config.Config {
 	return cfg
 }
 
-// statusFlippingExecutor wraps a claude.MockExecutor and flips
+// statusFlippingExecutor wraps a executor.MockExecutor and flips
 // sprint-status.yaml for the given story key from "backlog" to newStatus
 // when ExecuteWithResult is called. Simulates BMAD's create-story skill
 // updating sprint-status as a side effect of running.
 type statusFlippingExecutor struct {
-	mock      *claude.MockExecutor
+	mock      *executor.MockExecutor
 	statusDir string
 	key       string
 	newStatus string
 }
 
-func (e *statusFlippingExecutor) Execute(ctx context.Context, prompt string) (<-chan claude.Event, error) {
+func (e *statusFlippingExecutor) Execute(ctx context.Context, prompt string) (<-chan executor.Event, error) {
 	return e.mock.Execute(ctx, prompt)
 }
 
-func (e *statusFlippingExecutor) ExecuteWithResult(ctx context.Context, prompt string, handler claude.EventHandler) (int, error) {
+func (e *statusFlippingExecutor) ExecuteWithResult(ctx context.Context, prompt string, handler executor.EventHandler) (int, error) {
 	// Flip status first so StepCreate's post-check sees the new value.
 	statusPath := filepath.Join(e.statusDir, status.DefaultStatusPath)
 	if data, err := os.ReadFile(statusPath); err == nil {
@@ -56,7 +56,7 @@ func (e *statusFlippingExecutor) ExecuteWithResult(ctx context.Context, prompt s
 // newFlippingExecutor is a convenience constructor used by tests that want
 // to drive StepCreate through its happy path by simulating BMAD advancing
 // the status to ready-for-dev.
-func newFlippingExecutor(mock *claude.MockExecutor, dir, key, newStatus string) claude.Executor {
+func newFlippingExecutor(mock *executor.MockExecutor, dir, key, newStatus string) executor.Executor {
 	return &statusFlippingExecutor{
 		mock:      mock,
 		statusDir: dir,
@@ -139,7 +139,7 @@ func TestStepCreate_Success(t *testing.T) {
 	dir := setupStepCreateDir(t, key, "backlog", true)
 	printer := &mockPrinter{}
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	exec := newFlippingExecutor(mock, dir, key, "ready-for-dev")
 	p := NewPipeline(exec, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
@@ -160,7 +160,7 @@ func TestStepCreate_FileNotCreated(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "backlog", false)
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	exec := newFlippingExecutor(mock, dir, key, "ready-for-dev")
 	p := NewPipeline(exec, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
@@ -178,7 +178,7 @@ func TestStepCreate_StatusNotUpdated(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "backlog", true)
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -194,7 +194,7 @@ func TestStepCreate_ClaudeNonZeroExit(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "backlog", true)
 
-	mock := &claude.MockExecutor{ExitCode: 1}
+	mock := &executor.MockExecutor{ExitCode: 1}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -210,7 +210,7 @@ func TestStepCreate_ClaudeError(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "backlog", true)
 
-	mock := &claude.MockExecutor{Error: errors.New("binary not found")}
+	mock := &executor.MockExecutor{Error: errors.New("binary not found")}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -225,7 +225,7 @@ func TestStepCreate_ContextTimeout(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "backlog", true)
 
-	mock := &claude.MockExecutor{Error: context.DeadlineExceeded}
+	mock := &executor.MockExecutor{Error: context.DeadlineExceeded}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -241,7 +241,7 @@ func TestStepCreate_ContextCanceled(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "backlog", true)
 
-	mock := &claude.MockExecutor{Error: context.Canceled}
+	mock := &executor.MockExecutor{Error: context.Canceled}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -257,7 +257,7 @@ func TestStepCreate_NilStatusReader(t *testing.T) {
 	key := "1-2-database-schema"
 	dir := setupStepCreateDir(t, key, "ready-for-dev", true)
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir)
 
 	_, err := p.StepCreate(context.Background(), key)
@@ -283,7 +283,7 @@ func TestStepCreate_StoryKeyNotInSprintStatus(t *testing.T) {
 		0644,
 	))
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 	)
@@ -300,7 +300,7 @@ func TestStepCreate_DryRun(t *testing.T) {
 	dir := setupStepCreateDir(t, key, "backlog", false)
 	printer := &mockPrinter{}
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	p := NewPipeline(mock, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
 		WithPrinter(printer),
@@ -321,7 +321,7 @@ func TestStepCreate_PromptExpansion(t *testing.T) {
 	key := "3-1-user-auth"
 	dir := setupStepCreateDir(t, key, "backlog", true)
 
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	exec := newFlippingExecutor(mock, dir, key, "ready-for-dev")
 	p := NewPipeline(exec, config.DefaultConfig(), dir,
 		WithStatus(status.NewReader(dir)),
@@ -339,11 +339,11 @@ func TestStepCreate_VerboseForwardsEvents(t *testing.T) {
 	dir := setupStepCreateDir(t, key, "backlog", true)
 	printer := &mockPrinter{}
 
-	mock := &claude.MockExecutor{
+	mock := &executor.MockExecutor{
 		ExitCode: 0,
-		Events: []claude.Event{
-			{Type: claude.EventTypeAssistant, Text: "Working on it..."},
-			{Type: claude.EventTypeAssistant, Text: "Done!"},
+		Events: []executor.Event{
+			{Type: executor.EventTypeAssistant, Text: "Working on it..."},
+			{Type: executor.EventTypeAssistant, Text: "Done!"},
 		},
 	}
 	exec := newFlippingExecutor(mock, dir, key, "ready-for-dev")
@@ -481,7 +481,7 @@ func TestStepSync_DryRun(t *testing.T) {
 	beadsMock := &beads.MockExecutor{BeadID: "bd-should-not-reach"}
 
 	cfg := testConfig()
-	p := NewPipeline(&claude.MockExecutor{}, cfg, dir,
+	p := NewPipeline(&executor.MockExecutor{}, cfg, dir,
 		WithStatus(status.NewReader(dir)),
 		WithPrinter(printer),
 		WithBeads(beadsMock),
@@ -510,7 +510,7 @@ func TestStepSync_Verbose(t *testing.T) {
 	beadsMock := &beads.MockExecutor{BeadID: "bd-verbose-123"}
 
 	cfg := testConfig()
-	p := NewPipeline(&claude.MockExecutor{}, cfg, dir,
+	p := NewPipeline(&executor.MockExecutor{}, cfg, dir,
 		WithStatus(status.NewReader(dir)),
 		WithPrinter(printer),
 		WithBeads(beadsMock),

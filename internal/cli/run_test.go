@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"story-factory/internal/claude"
 	"story-factory/internal/config"
+	"story-factory/internal/executor"
 	"story-factory/internal/output"
 	"story-factory/internal/status"
 )
@@ -72,11 +72,12 @@ development_status:
 	))
 
 	var buf bytes.Buffer
-	mock := &claude.MockExecutor{ExitCode: 0}
+	mock := &executor.MockExecutor{ExitCode: 0}
 	app := &App{
 		Config:             config.DefaultConfig(),
 		Printer:            output.NewPrinterWithWriter(&buf),
-		Executor:           mock,
+		DefaultExecutor:    mock,
+		Executors:          map[string]executor.Executor{config.BackendClaude: mock},
 		CheckPreconditions: func(string) error { return nil },
 	}
 
